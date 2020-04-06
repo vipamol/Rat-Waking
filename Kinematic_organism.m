@@ -91,8 +91,8 @@ classdef Kinematic_organism < matlab.mixin.SetGet
         function success = load_and_process_kinematic_and_dynamic_data(obj,Data_file,StrideTime,to_plot)
             load (Data_file)
             current_size = size(Theta,1);
-%             num_of_samples = 100; %number of data points we wish to have per step
-            num_of_samples = 590;
+            num_of_samples = 100; %number of data points we wish to have per step
+%             num_of_samples = 590;
             
             if exist('AllTime','var')
                 total_length = AllTime(end); %Length of time that the data represents, in seconds
@@ -114,6 +114,7 @@ classdef Kinematic_organism < matlab.mixin.SetGet
                 obj.leg_obj{i}.dt_motion = newtime';
                 obj.leg_obj{i}.theta_motion = Theta;
                 obj.leg_obj{i}.theta_dot_motion = Theta_dot;
+                obj.leg_obj{i}.theta_doubledot_motion = Theta_doubledot;
             end
             
             if to_plot == 1
@@ -150,7 +151,10 @@ classdef Kinematic_organism < matlab.mixin.SetGet
                 end
             end
 %~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-            obj.set_muscle_properties()
+            obj.set_muscle_properties();
+%             obj.compute_all_jacobians([]);
+            obj.compute_all_EOM([]);
+%             obj.compute_all_MN();
             keyboard
             success = 1;
         end
@@ -160,7 +164,45 @@ classdef Kinematic_organism < matlab.mixin.SetGet
             for i=1:obj.num_legs
                 obj.leg_obj{i}.store_jointbody_position(to_plot);
                 obj.leg_obj{i}.store_muscle_lengthvelocity(to_plot);
-                obj.leg_obj{i}.store_muscle_parameters(1);
+                obj.leg_obj{i}.store_muscle_parameters(to_plot);
+            end
+        end
+        %%   Calculate All Jacobian
+        function compute_all_jacobians(obj,configs) 
+            if isempty(configs)
+                configs = zeros(size(obj.joint_limits,1),obj.num_legs);
+            elseif size(configs,1) == size(obj.joint_limits,1) && size(configs,2) == 1
+                configs = repmat(configs,1,obj.num_legs);
+            elseif size(configs,1) == size(obj.joint_limits,1) && size(configs,2) == obj.num_legs
+                %configs is the proper size
+            end
+            
+            for i=1:obj.num_legs
+                obj.leg_obj{i}.compute_jac(configs);                        
+            end
+        end
+        %%   Calculate Inertia Forces and Gravitational Forces (EOM)
+        function compute_all_EOM(obj,configs)
+            if isempty(configs)
+                configs = zeros(size(obj.joint_limits,1),obj.num_legs);
+            elseif size(configs,1) == size(obj.joint_limits,1) && size(configs,2) == 1
+                configs = repmat(configs,1,obj.num_legs);
+            elseif size(configs,1) == size(obj.joint_limits,1) && size(configs,2) == obj.num_legs
+                %configs is the proper size
+            end
+            to_plot = 1;
+            
+            for i=1:obj.num_legs
+                obj.leg_obj{i}.compute_EOM1(configs);
+                obj.leg_obj{i}.compute_EOM2(configs);
+                obj.leg_obj{i}.plot_EOM(to_plot);
+            end
+        end
+        %%   Calculate Motoneuron activation during walking
+        function compute_all_MN(obj)
+            to_plot = 1;
+            for i=1:obj.num_legs
+                obj.leg_obj{i}.compute_MN_act_for_motion(to_plot);
             end
         end
     end

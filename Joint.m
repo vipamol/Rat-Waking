@@ -23,9 +23,9 @@ classdef Joint < matlab.mixin.SetGet
         num_pts;          % Number of positions (also equal to the number of stiffnesses) to train on
         to_plot;          % Boolean of whether to plot the residuals or not
         
+        dt_motion;        % Time 
         theta_motion;     % Joint anlge
         theta_dot_motion; % Joint velocity
-        dt_motion;        % Time 
         
         joint_motion;     % Position of Joint during walking
         body_motion;      % Position of distal body during walking

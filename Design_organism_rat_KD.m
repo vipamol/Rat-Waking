@@ -18,16 +18,16 @@ Text_to_append = '_InverseKinematics';
 vers = '2020';
 RatDate = '29-Mar';
 RatJoint = 'LH_Leg';
-RatLoc = ['C:\Users\kaiyu\Desktop\Rat Kinematics and dynamics\',vers,'_Total_Optimizer\OutputFigures-',RatDate,'-2020-Rat\',RatJoint,Text_append,'.mat'];
+RatLoc = ['C:\Users\vipamol\Desktop\Rat Kinematics and dynamics\',vers,'_Total_Optimizer\OutputFigures-',RatDate,'-2020-Rat\',RatJoint,Text_append,'.mat'];
 
 %What joints and legs to train
 jnts = (3);
 legz = (1);
 
 %The project file and data of which your Animatlab Animal is being trained.
-proj_file = 'C:\Users\Kaiyu\Desktop\Rat Kinematics and dynamics\Biarticular.aproj';
+proj_file = 'C:\Users\vipamol\Desktop\Rat Kinematics and dynamics\Biarticular.aproj';
 
-Data_file = 'C:\Users\kaiyu\Desktop\Rat Kinematics and dynamics\JointKinematics.mat';
+Data_file = 'C:\Users\vipamol\Desktop\Rat Kinematics and dynamics\JointKinematics.mat';
 
 if makerat == 1
     
@@ -50,7 +50,7 @@ if makerat == 1
 
     min_step_period = 1/300; 
     
-    org = Kinematic_organism(proj_file,organism_name,bodies,joints,joint_limits,min_step_period,body_weight,theta_offset,[],mirrored,0);
+    org = Kinematic_organism(proj_file,organism_name,bodies,joints,joint_limits,min_step_period,body_weight,theta_offset,[],mirrored,1);
     org.load_and_process_kinematic_and_dynamic_data(Data_file,0.28,0)
     
 elseif makerat == 2

@@ -6,9 +6,10 @@ classdef Muscle < matlab.mixin.SetGet
       
       % Muscle parameters
       x_off                     % X offset in V (-.04=-40mV)
-      max_force                 % Stimulus-Tension Amplitude in Newtons
       steepness                 % Steepness
       y_off                     % Y offset in Newtons
+      ST_max                    %Magnitude of the ST curve, may or not be the same as Fmax
+      max_force                 % Stimulus-Tension Amplitude in Newtons
       damping                   % Damping constant in Ns/m
       Kse                       % Serial stiffness in N/m
       Kpe                       % Parallel stiffness in N/m
@@ -26,12 +27,11 @@ classdef Muscle < matlab.mixin.SetGet
       Po                             % Maximum isometric force in [g]
       tendon_sl                      % Tendon slack length in [mm]
       vmax_fiber                     % Maximum fiber shortening velocity in [mm/s]
-      
-      
-      
+       
       % Muscle motion profile
       muscle_length_profile          % Muscle length during walking 
       muscle_velocity_profile        % Muscle Velocity during walking 
+      passive_tension_profile        % Muscle passive tension during walking 
     end
     methods
         function obj = Muscle()
@@ -96,9 +96,9 @@ classdef Muscle < matlab.mixin.SetGet
             obj.RestingLength = musc_len;
         end
         function setup_reseting_length(obj)
-            %Sets the resting length at the maximum length so it always
-            %gets stronger as the muscle gets longer
-            obj.RestingLength = obj.l_max;
+            %Sets the resting length at the midpoint of motion range so
+            %there is always passive force during the walking.
+            obj.RestingLength = obj.l_min + 1/2*(obj.l_max-obj.l_min);
         end
         %% Muscle Lwidth length function
         function compute_l_width(obj)
@@ -110,22 +110,27 @@ classdef Muscle < matlab.mixin.SetGet
             %Changed to smaller 15/1/13 to make sure muscles don't pull too
             %strongly when they are short (especially helpful for ankle
             %extension), immediately changed back
-            percent_at_edge = .7;
             
             musc_range = obj.l_max-obj.l_min;
-            obj.l_width = abs(musc_range)/sqrt(1-percent_at_edge); %m
+%             percent_at_edge = .7;
+%             obj.l_width = abs(musc_range)/sqrt(1-percent_at_edge); %m
+            obj.l_width = abs(musc_range);  %m
         end
         %% Muscle damping function
         function compute_damping(obj)
-            % Linear damping coefficient af = a/Fmax = b/vmax
-            obj.damping = obj.Po/(obj.vmax_fiber)*9.81;
+            % Linear damping coefficient af = a/Fmax = b/vmax = 0.25 (Winters,1990)
+            % The equation should be (F+a)*(v+b)=(Fmax+a)   ==>
+            % B = 1.25*Fmax/(v+vmax/4) details can be found in Biomechanics
+            % of upper limbs Chapter 4.3
+            obj.max_force = obj.Po/1000*9.81;
+            obj.damping = 1.25*obj.Po*9.81/(obj.vmax_fiber/4);
         end
         %% Muscle Series Elastic function
         function compute_Kse(obj,max_musc_deflection)
             %KSE is calculated based on the idea that under max load, the
             %muscle deflects a certain percent: 1/C*rest_length
             factor = (1-obj.lf_lm)*max_musc_deflection; % legnth change ratio caused by series elasticity.
-            obj.Kse = (obj.Po/1000*9.81)/(obj.RestingLength*factor);
+            obj.Kse = obj.max_force/(obj.opt_fiber_length/1000*factor);
         end
         %% Muscle Parallel Elastic function
         function compute_Kpe(obj,max_musc_deflection)
@@ -135,13 +140,18 @@ classdef Muscle < matlab.mixin.SetGet
             %factor = 1;
             %obj.Kpe = factor*obj.Kse*(obj.Po/1000*9.81)/((obj.Po/1000*9.81)+obj.Kse*obj.l_max*max_musc_deflection);
             
-            obj.Kpe = obj.Kse*(obj.Po/1000*9.81)/(obj.Kse*obj.l_max*max_musc_deflection-obj.Po/1000*9.81);
+            obj.Kpe = obj.Kse*obj.max_force/(obj.Kse*obj.opt_muscle_length/1000*max_musc_deflection-obj.max_force);
+            
+            %Check ratio and tau before go!
+%             ratio = obj.Kse/obj.Kpe
+%             tau = obj.damping/(obj.Kse+obj.Kpe)
         end
         %% Muscle Passive Tension function
         function [Tension]= compute_passive_tension(obj,dt)
             x = [obj.muscle_length_profile;obj.muscle_length_profile;obj.muscle_length_profile];
             xdot = [obj.muscle_velocity_profile;obj.muscle_velocity_profile;obj.muscle_velocity_profile];
             T = NaN(length(x),1);
+            Tenpre = NaN(length(x),1);
             deltax = max(0,x - obj.RestingLength);
             
 %             for i = 1:length(x)
@@ -154,17 +164,45 @@ classdef Muscle < matlab.mixin.SetGet
             while True ==1
                 Ten = Tension_approximation(deltax,xdot,dt,obj.Kpe,obj.Kse,obj.damping,T);
                 T(1) = Ten(end);
+                
                 a = a+1;
-                if  Ten(1) == Ten(length(x)/3+1)|| a > 10000
+                if  isequal(Tenpre,Ten)|| a > 10000
                     True = 0;
+%                     disp(a)
                 end
+                Tenpre = Ten;
             end
             Tension = Ten(length(x)/3+1:2*length(x)/3);
+            obj.passive_tension_profile = Tension;
             % resampling
             num_of_samples = 100; %number of data points we wish to have per step
             current_size = size(Tension,1);
             Tension = interp1(linspace(0,1,current_size),Tension,linspace(0,1,num_of_samples));
-%             keyboard
+        end
+        %% Muscle Activation Curve function
+        function calc_activation_curve(obj)
+            %Steepness, y offset, and x offset are based on having 0 output
+            %at -100mV, 99% output at -.01mV and the center at -50mV
+            curve_center = -.05;
+            curve_min = 0;
+            curve_min_pos = -.1;
+            curve_high = .99;
+            curve_high_pos = -.01;
+            
+            %Initial guess for root finder for the steepness of the curve
+            x0 = 150;
+            %simplifications for root finder 
+            z = curve_high - curve_min;
+            x = curve_center - curve_high_pos;
+            y = curve_center - curve_min_pos;
+            
+            fun = @(s)z+1/(1+exp(s*y))-1/(1+exp(s*x));
+            s = fzero(fun,x0);
+            
+            obj.ST_max = obj.max_force;
+            obj.x_off = curve_center; %V
+            obj.steepness = s;
+            obj.y_off = curve_min-obj.ST_max/(1+exp(obj.steepness*y)); %N
         end
     end
 end
