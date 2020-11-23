@@ -54,6 +54,6 @@ plot(thistimec(1:end-2),dydt2)
 
 %Write angle and derivatives to files, make sure they are all the same
 %length
-% xlswrite('C:\Users\Kaiyu\Desktop\Rat Kinematics and Dynamics\Kinematic and Dynamic Processing\Signal.xlsx',[thistimec',thisstridec],1)
-% xlswrite('C:\Users\Kaiyu\Desktop\Rat Kinematics and Dynamics\Kinematic and Dynamic Processing\Signal.xlsx',[thistimec(1:end-1)',dydt],2)
-% xlswrite('C:\Users\Kaiyu\Desktop\Rat Kinematics and Dynamics\Kinematic and Dynamic Processing\Signal.xlsx',[thistimec(1:end-2)',dydt2],3)
+% xlswrite('C:\Users\vipamol\Desktop\Rat Kinematics and Dynamics\Kinematic and Dynamic Processing\Signal.xlsx',[thistimec',thisstridec],1)
+% xlswrite('C:\Users\vipamol\Desktop\Rat Kinematics and Dynamics\Kinematic and Dynamic Processing\Signal.xlsx',[thistimec(1:end-1)',dydt],2)
+% xlswrite('C:\Users\vipamol\Desktop\Rat Kinematics and Dynamics\Kinematic and Dynamic Processing\Signal.xlsx',[thistimec(1:end-2)',dydt2],3)

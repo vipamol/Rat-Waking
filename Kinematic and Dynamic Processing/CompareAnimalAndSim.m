@@ -21,7 +21,7 @@ function [Stride, StrideContact, NewTime, BackMean,BackRaw] = CompareAnimalAndSi
     %inside and for the number of trials desired. Then it finds the
     %mean stride timing and standard deviation of all the steps in the desired time
     %period for all the trials.
-%     [SFootContact, SFrontLeft, SFrontRight, SBackLeft, SBackRight, STime] = PerturbedCollection(to_plot);
+    [SFootContact, SFrontLeft, SFrontRight, SBackLeft, SBackRight, STime] = PerturbedCollection(to_plot);
 
     %Animal Coordination finds the mean and standard deviation for all the
     %animal data for timing of footfall between different legs.

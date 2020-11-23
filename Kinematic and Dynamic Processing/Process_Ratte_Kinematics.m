@@ -16,7 +16,7 @@ function [ATime, AFootContact, AFrontLeft, AFrontRight, ABackLeft, ABackRight] =
     clear Num Txt Raw Data
 
     %Read in data
-    [Num,Txt,Raw] = xlsread('C:\Users\Kaiyu\Desktop\Rat Kinematics and Dynamics\Kinematic and Dynamic Processing\Ratte 1 Limb kinematics.xlsx',i);
+    [Num,Txt,Raw] = xlsread('C:\Users\vipamol\Desktop\Rat Kinematics and Dynamics\Kinematic and Dynamic Processing\Ratte 1 Limb kinematics.xlsx',i);
 
     %Velocity from cell B2
     Avelocity(i) = Num(1,2);

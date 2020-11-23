@@ -7,9 +7,7 @@
 % function output = ConnectData()
 
 %First read in all the Rat data from excel and mat files
-[ATime, AFootContact, AFrontLeft, AFrontRight, ABackLeft, ABackRight] = Process_Ratte_Kinematics;
-load('mean_kinematics_stand.mat');
-load('mean_torques.mat')
+ [ATime, AFootContact, AFrontLeft, AFrontRight, ABackLeft, ABackRight] = Process_Ratte_Kinematics;
 
 %This cycles through the legs (currently set to just the hind legs) finds
 %when the steps occured, breaks them up, puts stance as the first 50% and
@@ -24,6 +22,9 @@ Ani_RMS;
 %This smooths out the swing data and finds the derivatives. This data is
 %used for simulating in the SimMechanic Model
 SmoothStride
+
+load('mean_kinematics_stand.mat');
+load('mean_torques.mat')
 
 %This finds the hip, knee, and ankle angles based on the input kinematic
 %data of femur, fibula, and foot and assumes a fixed pelvis angle of 30
@@ -117,6 +118,7 @@ AllKinematicInfo = [.28*[0:1/t:1-1/t]',Theta,Theta_dot,Theta_doubledot]';
 save('AllSignal.mat','AllKinematicInfo')
 save('JointKinematics','Theta','Theta_dot','Theta_doubledot')
 keyboard
+close all
 %% Use new kinematic data to find torques on joints during swing
 
 %Get just the swing data part and differentiate it twice for simulation
@@ -152,10 +154,10 @@ TorqueAll2 = [TorqueSwing;-TorqueStance;TorqueSwing;-TorqueStance];
 %Plot for fun
 h = figure;
 plotvec = linspace(0,1,length(TorqueAll2));
-plot(plotvec,1e3*TorqueAll2(:,:),'linewidth',2)
+plot(plotvec,TorqueAll2(:,:),'linewidth',2)
 title('Joint Torque')
 xlabel('Percent Stride')
-ylabel('Torque (mN-m)')
+ylabel('Torque (N-m)')
 set(h,'Position',[500,500,700,250])
 grid on
 
@@ -184,10 +186,10 @@ save('Kinematics and Dynamics.mat','TorqueAll','Theta','Theta_dot','Theta_double
 %Plot for fun
 h = figure;
 plotvec = linspace(0,1,length(TorqueAll));
-plot(plotvec,1e3*TorqueAll(:,:),'linewidth',2)
+plot(plotvec,TorqueAll(:,:),'linewidth',2)
 title('Joint Torque')
 xlabel('Percent Stride')
-ylabel('Torque (mN-m)')
+ylabel('Torque (N-m)')
 set(h,'Position',[500,500,700,250])
 grid on
 
