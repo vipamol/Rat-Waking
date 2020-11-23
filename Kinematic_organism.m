@@ -7,7 +7,6 @@ classdef Kinematic_organism < matlab.mixin.SetGet
         mirrored;
         num_legs;
         joint_limits;
-        
     end
     
     methods
@@ -90,6 +89,8 @@ classdef Kinematic_organism < matlab.mixin.SetGet
         %%   Load the kinematc and dynamic data  
         function success = load_and_process_kinematic_and_dynamic_data(obj,Data_file,StrideTime,to_plot)
             load (Data_file)
+            load('JointTorque.mat');
+            
             current_size = size(Theta,1);
             num_of_samples = 100; %number of data points we wish to have per step
 %             num_of_samples = 590;
@@ -109,12 +110,14 @@ classdef Kinematic_organism < matlab.mixin.SetGet
             Theta = interp1(linspace(0,1,current_size),Theta,linspace(0,1,num_of_samples));
             Theta_dot = interp1(linspace(0,1,current_size),Theta_dot,linspace(0,1,num_of_samples));
             Theta_doubledot = interp1(linspace(0,1,current_size),Theta_doubledot,linspace(0,1,num_of_samples));
+            Torque = interp1(linspace(0,1,current_size),JointTorque,linspace(0,1,num_of_samples));
             
             for i=1:obj.num_legs
                 obj.leg_obj{i}.dt_motion = newtime';
                 obj.leg_obj{i}.theta_motion = Theta;
                 obj.leg_obj{i}.theta_dot_motion = Theta_dot;
                 obj.leg_obj{i}.theta_doubledot_motion = Theta_doubledot;
+                obj.leg_obj{i}.torque_motion = Torque;
             end
             
             if to_plot == 1
@@ -150,11 +153,24 @@ classdef Kinematic_organism < matlab.mixin.SetGet
                         close all
                 end
             end
+            
+            if to_plot == 2
+                T = {'Hip','Knee','Ankle'};
+                for i = 1:3
+                subplot(1,3,i)
+                plot(Theta(:,i),'Linewidth',2)
+                set(gca,'XTick',0:50:100);
+                xlabel('stance                         swing')
+                title(T{i})
+                end
+                suptitle('Joint Angles (radians)')
+            end
 %~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
             obj.set_muscle_properties();
 %             obj.compute_all_jacobians([]);
-            obj.compute_all_EOM([]);
+%             obj.compute_all_EOM([]);
 %             obj.compute_all_MN();
+            obj.design_neuron_controller();
             keyboard
             success = 1;
         end
@@ -162,9 +178,13 @@ classdef Kinematic_organism < matlab.mixin.SetGet
         function  set_muscle_properties(obj)
             to_plot = 0;
             for i=1:obj.num_legs
-                obj.leg_obj{i}.store_jointbody_position(to_plot);
+                obj.leg_obj{i}.store_jointbody_position(to_plot)
                 obj.leg_obj{i}.store_muscle_lengthvelocity(to_plot);
                 obj.leg_obj{i}.store_muscle_parameters(to_plot);
+                
+                % Call Plot Functions
+                obj.leg_obj{i}.plot_walking_motion(to_plot);
+                obj.leg_obj{i}.plot_phase_passive_tension(to_plot);
             end
         end
         %%   Calculate All Jacobian
@@ -190,19 +210,32 @@ classdef Kinematic_organism < matlab.mixin.SetGet
             elseif size(configs,1) == size(obj.joint_limits,1) && size(configs,2) == obj.num_legs
                 %configs is the proper size
             end
-            to_plot = 1;
+            to_plot = 0;
             
             for i=1:obj.num_legs
                 obj.leg_obj{i}.compute_EOM1(configs);
                 obj.leg_obj{i}.compute_EOM2(configs);
+                obj.leg_obj{i}.compute_ground_EOM(configs,0);
+                
+                % Call Plot functions
+                obj.leg_obj{i}.plot_ground_walking_motion(to_plot);
                 obj.leg_obj{i}.plot_EOM(to_plot);
             end
         end
         %%   Calculate Motoneuron activation during walking
         function compute_all_MN(obj)
-            to_plot = 1;
+            to_plot = 1;                   
             for i=1:obj.num_legs
+%                 obj.leg_obj{i}.compute_joint_moment_arm(to_plot);
                 obj.leg_obj{i}.compute_MN_act_for_motion(to_plot);
+            end
+        end
+        %%  Design Synthetic Nervous System
+        function design_neuron_controller(obj)
+           
+             for i=1:obj.num_legs
+                obj.leg_obj{i}.load_neurons();
+                obj.leg_obj{i}.design_synapse();
             end
         end
     end

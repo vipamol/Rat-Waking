@@ -2,7 +2,7 @@ function Plot_muscle()
 % Plot muscle length and velocity during walking
 load('muscle.mat')
 
-Plot_all = 0; % if Plot_all = 1 plot all muscle together, otherwise plot seperately.
+Plot_all = 1; % if Plot_all = 1 plot all muscle together, otherwise plot seperately.
 
 num = length(muscle_name);
 for i = 1:num

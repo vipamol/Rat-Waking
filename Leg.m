@@ -20,6 +20,8 @@ classdef Leg < matlab.mixin.SetGet
         joint_obj; %cell array of joint objects (for each joint in the leg)
         musc_inds;
         musc_obj;%cell array of muscle objects (for each muscle in the leg)
+        neur_inds;
+        neur_obj;%cell array of neuron objects (for each neuron in the leg)
         to_plot; %boolean of whether or not to plot graphs of the leg.
         vec_len; %length of the axis vector drawn in the kinematic maps.
         
@@ -664,12 +666,13 @@ classdef Leg < matlab.mixin.SetGet
 %                 SC{i+1,4} = obj.musc_obj{i}.Kpe;
 %                 SC{i+1,5} = obj.musc_obj{i}.Kse/obj.musc_obj{i}.Kpe;
 %                 SC{i+1,6} = obj.musc_obj{i}.damping/(obj.musc_obj{i}.Kse+obj.musc_obj{i}.Kpe);
-                
+%                   RL{i,1} = obj.musc_obj{i}.RestingLength;
+                  
                 % Calculate muscle passive tension
                 Tension{i} = obj.musc_obj{i}.compute_passive_tension(dt);
                 muscle_name{i} = obj.musc_obj{i}.muscle_name;
             end
-            
+            keyboard
             telapsed = toc(tstart);
             disp(['Muscle properties stored.',' (',num2str(telapsed),'s)'])
 %~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -683,7 +686,7 @@ classdef Leg < matlab.mixin.SetGet
             end
         end
         %% Calculate Jacobian matrix(Spatial Manipulator)
-        function [Jac,p_foot,L] = compute_jac(obj,theta)
+        function [Jac,p_foot] = compute_jac(obj,theta)
             %To clarify, this Jacobian is not the classical numerical jacobian
             %(differential of a function for each generalized coordinate). This
             %is the spatial manipulator Jacobian (see "A Mathematical Introduction to Robotic Manipulation" Murray, Li, and Sastry 1994)
@@ -1002,9 +1005,9 @@ classdef Leg < matlab.mixin.SetGet
             
             
             % The Inertia Matrix
-            Inertia = [M(1)*R1'*R1 + M(2)*L21'*L21 + M(3)*L31'*L31, M(2)*L21'*R2 + M(3)*L31'*L32,  M(3)*L31'*R3;...
-                       M(2)*L21'*R2 + M(3)*L31'*L32, M(2)*R2'*R2 + M(3)*L32'*L32, M(3)*L32'*R3;...
-                       M(3)*L31'*R3, M(3)*L32'*R3, M(3)*R3'*R3];
+            Inertia = [M(1)*(R1'*R1) + M(2)*(L21'*L21) + M(3)*(L31'*L31), M(2)*L21'*R2 + M(3)*L31'*L32,  M(3)*L31'*R3;...
+                       M(2)*L21'*R2 + M(3)*L31'*L32, M(2)*(R2'*R2) + M(3)*(L32'*L32), M(3)*L32'*R3;...
+                       M(3)*L31'*R3, M(3)*L32'*R3, M(3)*(R3'*R3)];
             % Nonhomo Inertia Matrix
             Int = [2*M(1)*R1'*R11+2*M(2)*L21'*L211+2*M(3)*L31'*L311, 2*M(2)*L21'*L212+M(2)*L21'*R21+2*M(3)*L31'*L312+M(2)*R2'*L211+M(3)*L31'*L321+M(3)*L32'*L311, 2*M(3)*L31'*L313+M(3)*L31'*R31+M(3)*R3'*L311, M(2)*L21'*R22+M(2)*R2'*L212+M(3)*L31'*L322+M(3)*L32'*L312, M(3)*L31'*L323+M(3)*L32'*L313+M(3)*L31'*R32+M(3)*R3'*L312, M(3)*L31'*R33+M(3)*R3'*L313;...
                    M(2)*L21'*R21+M(2)*R2'*L211+M(3)*L31'*L321+M(3)*L32'*L311, 2*M(2)*R2'*R21+M(2)*L21'*R22+M(2)*R2'*L212+M(3)*L31'*L322+M(3)*L32'*L312+2*M(3)*L32'*L321, M(3)*L31'*L323+M(3)*L32'*L313+M(3)*R3'*L321, 2*M(2)*R2'*R22+2*M(2)*L32'*L322, 2*M(3)*L32'*L323+M(3)*L32'*R32+M(3)*R3'*L322, M(3)*L32'*R33+M(3)*R3'*L323;...
@@ -1020,6 +1023,263 @@ classdef Leg < matlab.mixin.SetGet
                          [0 1 0]*(-(M(2)+M(3))*obj.cum_C_joints(:,:,2)*C_def(:,:,3)*obj.CR_bodies(:,:,3)*obj.pos_joints(:,3)+M(3)*obj.cum_C_joints(:,:,2)*C_def(:,:,3)*obj.CR_bodies(:,:,3)*(obj.pos_bodies(:,4)+(eye(3)-obj.C_joints(:,:,4))*obj.CR_bodies(:,:,4)*obj.pos_joints(:,4)));...
                          [0 1 0]*(-M(3)*obj.cum_C_joints(:,:,3)*C_def(:,:,4)*obj.CR_bodies(:,:,4)*obj.pos_joints(:,4))];
            
+%             keyboard
+        end
+        %% Calculate Gravitational force of ground walking
+        function [Pelvis,Inertia,Int,Moment,Grav] = compute_ground_EOM(obj,theta_ind,phase)
+            % Calculate EOM for ground walking is little bit different from
+            % previous, as it needs to be split into two phase:
+            % Stance and Swing. As the Stance phase containes pelvis into
+            % the Lagrange Equation of motion and Swing phase don't
+            
+            if length(theta_ind) ==  1
+                theta = obj.theta_motion(theta_ind,:)';
+            else
+                theta = theta_ind;
+            end
+            
+            if length(theta) == obj.num_bodies - 1
+                theta = [0;theta];
+            elseif length(theta) == obj.num_bodies
+                %Do Nothing!
+            elseif isempty(theta)
+                theta = zeros(obj.num_bodies,1);
+            else
+                disp('Orientation vector is not proper length.Should be a nx1 vector where n=num_bodies (first element is time)')
+                Inertia = -1;
+                Int = -1;
+                Moment = -1;
+                Grav = -1;
+                return
+            end
+            
+            % First let's get the mass of each segment in Kg
+            % 1: Pelvis; 2: Femur; 3: Tiabi; 4: Foot
+            M = zeros((obj.num_bodies),1); % Mass matrix
+            for i = 1:obj.num_bodies
+                % Find the right body
+                body_found = contains(obj.original_text,['<Name>',obj.bodies{i},'</Name>']);
+                next_body_ind = find(body_found,1,'first');
+                chain_lower_limit = next_body_ind;
+                % Searching for the mass
+                mass_found = contains(obj.original_text(chain_lower_limit:end),'<Mass>');
+                mass_ind = find(mass_found,1,'first') + chain_lower_limit - 1;
+                mass = obj.original_text(mass_ind);
+                % Extract the value 
+                mass = strrep(mass,'<Mass>','');
+                mass = strrep(mass,'</Mass>','');
+                M(i) = str2double(mass)/1000;
+            end
+            
+             %%% Now calculate EOM
+            r_N = zeros(3,obj.num_bodies);         % Bodies world position
+            obj.cum_C_joints = zeros(size(obj.C_joints));
+            C_def = obj.cum_C_joints;
+            C_dot =  C_def;
+            obj.cum_C_joints(:,:,1) = eye(3)*obj.CR_bodies(:,:,1);
+            
+            for i=2:obj.num_bodies
+                % Rotate Matrix based on theta
+                u = obj.CR_bodies(:,:,i)*obj.CR_joints(:,:,i)*[-1;0;0];
+                obj.C_joints(:,:,i) = [cos(theta(i))+u(1)^2*(1-cos(theta(i))),u(1)*u(2)*(1-cos(theta(i)))-u(3)*sin(theta(i)),u(1)*u(3)*(1-cos(theta(i)))+u(2)*sin(theta(i));u(2)*u(1)*(1-cos(theta(i)))+u(3)*sin(theta(i)),cos(theta(i))+u(2)^2*(1-cos(theta(i))),u(2)*u(3)*(1-cos(theta(i)))-u(1)*sin(theta(i));u(3)*u(1)*(1-cos(theta(i)))-u(2)*sin(theta(i)),u(3)*u(2)*(1-cos(theta(i)))+u(1)*sin(theta(i)),cos(theta(i))+u(3)^2*(1-cos(theta(i)))];
+                obj.cum_C_joints(:,:,i) = obj.cum_C_joints(:,:,i-1)*obj.C_joints(:,:,i)*obj.CR_bodies(:,:,i);
+                C_def(:,:,i) = [sin(theta(i))*(u(1)^2-1),u(1)*u(2)*sin(theta(i))-u(3)*cos(theta(i)),u(1)*u(3)*sin(theta(i))+u(2)*cos(theta(i));u(1)*u(2)*sin(theta(i))+u(3)*cos(theta(i)),sin(theta(i))*(u(2)^2-1),u(2)*u(3)*sin(theta(i))-u(1)*cos(theta(i));u(3)*u(1)*sin(theta(i))-u(2)*cos(theta(i)),u(3)*u(2)*sin(theta(i))+u(1)*cos(theta(i)),sin(theta(i))*(u(3)^2-1)];
+                C_dot(:,:,i) = [cos(theta(i))*(u(1)^2-1),u(1)*u(2)*cos(theta(i))+u(3)*sin(theta(i)),u(1)*u(3)*cos(theta(i))-u(2)*sin(theta(i));u(1)*u(2)*cos(theta(i))-u(3)*sin(theta(i)),cos(theta(i))*(u(2)^2-1),u(2)*u(3)*cos(theta(i))+u(1)*sin(theta(i));u(1)*u(3)*cos(theta(i))+u(2)*sin(theta(i)),u(2)*u(3)*cos(theta(i))-u(1)*sin(theta(i)),cos(theta(i))*(u(3)^2-1)]; 
+                % r_N is the "World Position" in Animatlab of each body
+                r_N(:,i) = r_N(:,i-1)+ obj.cum_C_joints(:,:,i-1)*obj.pos_bodies(:,i)+obj.cum_C_joints(:,:,i-1)*(eye(3)-obj.C_joints(:,:,i))*obj.CR_bodies(:,:,i)*obj.pos_joints(:,i);       
+            end      
+            
+            if ~obj.toe_pos_known
+                toe_pos = [-17.708;-73.113;-21.412]/1000 - [-22.027;-63.924;-21.424]/1000; %Local position of the toe.
+                obj.foot_vec = obj.Cabs_bodies(:,:,end)'*toe_pos;
+            end
+            obj.toe_pos_known = 1;
+            
+            % test filed
+            toe = r_N(:,end)+obj.cum_C_joints(:,:,end)*obj.pos_joints(:,end)+obj.cum_C_joints(:,:,end)*obj.foot_vec;
+            r_N = r_N - toe;
+            Pelvis = r_N(:,1);
+            
+%~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~         
+            if phase == 1
+                %%% EOM for Stance phase
+                %%% Velocity factor of each body
+                R1 = obj.cum_C_joints(:,:,1)*C_def(:,:,2)*obj.CR_bodies(:,:,2)*(obj.pos_joints(:,2)-obj.pos_bodies(:,3)-(eye(3)-obj.C_joints(:,:,3))*obj.CR_bodies(:,:,3)*obj.pos_joints(:,3)-obj.C_joints(:,:,3)*obj.CR_bodies(:,:,3)*obj.pos_bodies(:,4)-obj.C_joints(:,:,3)*obj.CR_bodies(:,:,3)*obj.CR_bodies(:,:,4)*obj.pos_joints(:,4)-obj.C_joints(:,:,3)*obj.CR_bodies(:,:,3)*obj.C_joints(:,:,4)*obj.CR_bodies(:,:,4)*obj.foot_vec);
+                L21 = R1-obj.cum_C_joints(:,:,1)*C_def(:,:,2)*obj.CR_bodies(:,:,2)*obj.pos_joints(:,2);
+                R2 = obj.cum_C_joints(:,:,2)*C_def(:,:,3)*obj.CR_bodies(:,:,3)*(obj.pos_joints(:,3)-obj.pos_bodies(:,4)-obj.CR_bodies(:,:,4)*obj.pos_joints(:,4)-obj.C_joints(:,:,4)*obj.CR_bodies(:,:,4)*obj.foot_vec);
+                L31 = L21+obj.cum_C_joints(:,:,1)*C_def(:,:,2)*obj.CR_bodies(:,:,2)*(obj.pos_bodies(:,3)+(eye(3)-obj.C_joints(:,:,3))*obj.CR_bodies(:,:,3)*obj.pos_joints(:,3));
+                L32 = R2-obj.cum_C_joints(:,:,2)*C_def(:,:,3)*obj.CR_bodies(:,:,3)*obj.pos_joints(:,3);
+                R3 = -obj.cum_C_joints(:,:,3)*C_def(:,:,4)*obj.CR_bodies(:,:,4)*obj.foot_vec;
+                L41 = -obj.cum_C_joints(:,:,1)*C_def(:,:,2)*obj.CR_bodies(:,:,2)*obj.C_joints(:,:,3)*obj.CR_bodies(:,:,3)*obj.C_joints(:,:,4)*obj.CR_bodies(:,:,4)*obj.foot_vec;
+                L42 = -obj.cum_C_joints(:,:,2)*C_def(:,:,3)*obj.CR_bodies(:,:,3)*obj.C_joints(:,:,4)*obj.CR_bodies(:,:,4)*obj.foot_vec;
+                
+                %%%Double dot factor
+                R11 = obj.cum_C_joints(:,:,1)*C_dot(:,:,2)*obj.CR_bodies(:,:,2)*(obj.pos_joints(:,2)-obj.pos_bodies(:,3)-(eye(3)-obj.C_joints(:,:,3))*obj.CR_bodies(:,:,3)*obj.pos_joints(:,3)-obj.C_joints(:,:,3)*obj.CR_bodies(:,:,3)*obj.pos_bodies(:,4)-obj.C_joints(:,:,3)*obj.CR_bodies(:,:,3)*obj.CR_bodies(:,:,4)*obj.pos_joints(:,4)-obj.C_joints(:,:,3)*obj.CR_bodies(:,:,3)*obj.C_joints(:,:,4)*obj.CR_bodies(:,:,4)*obj.foot_vec);
+                R12 = obj.cum_C_joints(:,:,1)*C_def(:,:,2)*obj.CR_bodies(:,:,2)*C_def(:,:,3)*obj.CR_bodies(:,:,3)*(obj.pos_joints(:,3)-obj.pos_bodies(:,4)-obj.CR_bodies(:,:,4)*obj.pos_joints(:,4)-obj.C_joints(:,:,4)*obj.CR_bodies(:,:,4)*obj.foot_vec);
+                R13 = -obj.cum_C_joints(:,:,1)*C_def(:,:,2)*obj.CR_bodies(:,:,2)*obj.C_joints(:,:,3)*obj.CR_bodies(:,:,3)*C_def(:,:,4)*obj.CR_bodies(:,:,4)*obj.foot_vec;
+                R22 = obj.cum_C_joints(:,:,2)*C_dot(:,:,3)*obj.CR_bodies(:,:,3)*(obj.pos_joints(:,3)-obj.pos_bodies(:,4)-obj.CR_bodies(:,:,4)*obj.pos_joints(:,4)-obj.C_joints(:,:,4)*obj.CR_bodies(:,:,4)*obj.foot_vec);
+                R23 = -obj.cum_C_joints(:,:,2)*C_def(:,:,3)*obj.CR_bodies(:,:,3)*C_def(:,:,4)*obj.CR_bodies(:,:,4)*obj.foot_vec;
+                R33 = -obj.cum_C_joints(:,:,3)*C_dot(:,:,4)*obj.CR_bodies(:,:,4)*obj.foot_vec;
+                
+                L211 = R11-obj.cum_C_joints(:,:,1)*C_dot(:,:,2)*obj.CR_bodies(:,:,2)*obj.pos_joints(:,2);  
+                L311 = L211+obj.cum_C_joints(:,:,1)*C_dot(:,:,2)*obj.CR_bodies(:,:,2)*(obj.pos_bodies(:,3)+(eye(3)-obj.C_joints(:,:,3))*obj.CR_bodies(:,:,3)*obj.pos_joints(:,3));
+                L312 = R12-obj.cum_C_joints(:,:,1)*C_dot(:,:,2)*obj.CR_bodies(:,:,2)*C_def(:,:,3)*obj.CR_bodies(:,:,3)*obj.pos_joints(:,3);
+                L322 = R22 - obj.cum_C_joints(:,:,2)*C_dot(:,:,3)*obj.CR_bodies(:,:,3)*obj.pos_joints(:,3);
+                L411 = -obj.cum_C_joints(:,:,1)*C_dot(:,:,2)*obj.CR_bodies(:,:,2)*obj.C_joints(:,:,3)*obj.CR_bodies(:,:,3)*obj.C_joints(:,:,4)*obj.CR_bodies(:,:,4)*obj.foot_vec;
+                L412 = -obj.cum_C_joints(:,:,1)*C_def(:,:,2)*obj.CR_bodies(:,:,2)*C_def(:,:,3)*obj.CR_bodies(:,:,3)*obj.C_joints(:,:,4)*obj.CR_bodies(:,:,4)*obj.foot_vec;
+                L422 = -obj.cum_C_joints(:,:,2)*C_dot(:,:,3)*obj.CR_bodies(:,:,3)*obj.C_joints(:,:,4)*obj.CR_bodies(:,:,4)*obj.foot_vec;
+                  
+                % The Inertia Matrix
+                Inertia = [M(1)*(R1'*R1)+M(2)*(L21'*L21)+M(3)*(L31'*L31)+M(4)*(L41'*L41), M(1)*R1'*R2+M(2)*L21'*R2+M(3)*L31'*L32+M(4)*L41'*L42, M(1)*R1'*R3+M(2)*L21'*R3+M(3)*L31'*R3+M(4)*L41'*R3;...
+                           M(1)*R1'*R2+M(2)*L21'*R2+M(3)*L31'*L32+M(4)*L41'*L42, M(1)*(R2'*R2)+M(2)*(R2'*R2)+M(3)*(L32'*L32)+M(4)*(L42'*L42), M(1)*R2'*R3+M(2)*R2'*R3+M(3)*L32'*R3+M(4)*L42'*R3;...
+                           M(1)*R1'*R3+M(2)*L21'*R3+M(3)*L31'*R3+M(4)*L41'*R3, M(1)*R2'*R3+M(2)*R2'*R3+M(3)*L32'*R3+M(4)*L42'*R3, (M(1)+M(2)+M(3)+M(4))*(R3'*R3)];
+                
+                % Nonhomo Inertia Matrix
+                Int = [2*M(1)*R1'*R11+2*M(2)*L21'*L211+2*M(3)*L31'*L311+2*M(4)*L41'*L411, M(1)*(3*R1'*R12+R11'*R2)+M(2)*(3*L21'*R12+L211'*R2)+M(3)*(3*L31'*L312+L311'*L32)+M(4)*(3*L41'*L412+L411'*L42), M(1)*(3*R1'*R13+R11'*R3)+M(2)*(3*L21'*R13+L211'*R3)+M(3)*(3*L31'*R13+L311'*R3)+M(4)*(3*L41'*R13+L411'*R3), (M(1)+M(2))*R12'*R2+M(1)*R1'*R22+M(2)*L21'*R22+M(3)*(L312'*L32+L322'*L31)+M(4)*(L412'*L42+L422'*L41), (M(1)+M(2))*(R13'*R2+R12'*R3)+2*M(1)*R1'*R23+2*M(2)*L21'*R23+M(3)*(R13'*L32+2*L31'*R23+L312'*R3)+M(4)*(R13'*L42+2*R23'*L41+L412'*R3), M(1)*(R13'*R3+R1'*R33)+M(2)*(R13'*R3+L21'*R33)+M(3)*(R13'*R3+L31'*R33)+M(4)*(R13'*R3+L41'*R33);...
+                       M(1)*(R1'*R12+R2'*R11)+M(2)*(L21'*R12+L211'*R2)+M(3)*(L31'*L312+L32'*L311)+M(4)*(L41'*L412+L42'*L411), M(1)*(3*R2'*R12+R1'*R22)+M(2)*(3*R2'*R12+L21'*R22)+M(3)*(3*L32'*L312+L31'*L322)+M(4)*(3*L42'*L412+L41'*L422), M(1)*(R1'*R23+2*R2'*R13+R3'*R12)+M(2)*(L21'*R23+2*R2'*R13+R3'*R12)+M(3)*(L31'*R23+2*L32'*R13+R3'*L312)+M(4)*(L41'*R23+2*L42'*R13+R3'*L412), 2*(M(1)+M(2))*R2'*R22+2*M(3)*L32'*L322+2*M(4)*L42'*L422, (M(1)+M(2))*(3*R2'*R23+R3'*R22)+M(3)*(3*L32'*R23+R3'*L322)+M(4)*(3*L42'*R23+R3'*L422), (M(1)+M(2)+M(3)+M(4))*R3'*R23+(M(1)+M(2))*R2'*R33+M(3)*L32'*R33+M(4)*L42'*R33;...
+                       M(1)*(R11'*R3+R1'*R13)+M(2)*(L211'*R3+L21'*R13)+M(3)*(L311'*R3+L31'*R13)+M(4)*(L411'*R3+L41'*R13), M(1)*(2*R12'*R3+R2'*R13+R1'*R23)+M(2)*(2*R12'*R3+R2'*R13+L21'*R23)+M(3)*(2*L312'*R3+L31'*R23+L32'*R13)+M(4)*(2*L412'*R3+L41'*R23+L42'*R13), 3*(M(1)+M(2)+M(3)+M(4))*R3'*R13+M(1)*R1'*R33+M(2)*L21'*R33+M(3)*L31'*R33+M(4)*L41'*R33, (M(1)+M(2))*(R22'*R3+R23'*R2)+M(3)*(L322'*R3+L32'*R23)+M(4)*(L422'*R3+L42'*R23), 3*(M(1)+M(2)+M(3)+M(4))*R3'*R23+(M(1)+M(2))*R2'*R33+M(3)*L32'*R33+M(4)*L42'*R33, 2*(M(1)+M(2)+M(3)+M(4))*R3'*R33];
+                
+                % The Momentum Matrix
+                Moment = [M(1)*R1'*R11+M(2)*L21'*L211+M(3)*L31'*L311+M(4)*L41'*L411, M(1)*(R1'*R12+R11'*R2)+M(2)*(L21'*R12+L211'*R2)+M(3)*(L31'*L312+L311'*L32)+M(4)*(L41'*L412+L411'*L42), M(1)*(R3'*R12+R13'*R2)+M(2)*(L21'*R13+L211'*R3)+M(3)*(L31'*R13+L311'*R3)+M(4)*(L41'*R13+L411'*R3), (M(1)+M(2))*R12'*R2+M(3)*L312'*L32+M(4)*L412'*L42, (M(1)+M(2))*(R13'*R2+R12'*R3)+M(3)*(R13'*L32+L312'*R3)+M(4)*(R13'*L42+L412'*R3), (M(1)+M(2)+M(3)+M(4))*R3'*R13;...
+                          M(1)*R1'*R12+M(2)*L21'*R12+M(3)*L31'*L312+M(4)*L41'*L412, M(1)*(R2'*R12+R1'*R22)+M(2)*(R2'*R12+L21'*R22)+M(3)*(L32'*L312+L31'*L322)+M(4)*(L42'*L412+L41'*L422), M(1)*(R2'*R23+R3'*R22)+M(2)*(L21'*R23+R3'*R12)+M(3)*(L31'*R23+R3'*L312)+M(4)*(L41'*R23+R3'*L412), (M(1)+M(2))*R2'*R22+M(3)*L32'*L322+M(4)*L42'*L422, (M(1)+M(2))*(R2'*R23+R3'*R22)+M(3)*(L32'*R23+R3'*L322)+M(4)*(L42'*R23+R3'*L422), (M(1)+M(2)+M(3)+M(4))*R3'*R23;...
+                          M(1)*R1'*R13+M(2)*L21'*R13+M(3)*L31'*R13+M(4)*L41'*R13, M(1)*(R2'*R13+R1'*R23)+M(2)*(R2'*R13+L21'*R23)+M(3)*(L32'*R13+L31'*R23)+M(4)*(L42'*R12+L41'*R23), M(1)*(R2'*R33+R3'*R23)+M(2)*(L21'*R33+R3'*R13)+M(3)*(L31'*R33+R3'*R13)+M(4)*(L41'*R33+R3'*R13), (M(1)+M(2))*R2'*R23+M(3)*L32'*R23+M(4)*L42'*R23, (M(1)+M(2))*(R2'*R33+R3'*R23)+M(3)*(L32'*R33+R3'*R23)+M(4)*(L42'*R33+R3'*R23), (M(1)+M(2)+M(3)+M(4))*R3'*R33];
+                
+                % The Gravitational Matrix   
+                Grav = 9.81*[[0 1 0]*(M(1)*obj.cum_C_joints(:,:,1)*C_def(:,:,2)*obj.CR_bodies(:,:,2)*obj.pos_joints(:,2)-(M(1)+M(2))*obj.cum_C_joints(:,:,1)*C_def(:,:,2)*obj.CR_bodies(:,:,2)*(obj.pos_bodies(:,3)+(eye(3)-obj.C_joints(:,:,3))*obj.CR_bodies(:,:,3)*obj.pos_joints(:,3))-(M(1)+M(2)+M(3))*obj.cum_C_joints(:,:,1)*C_def(:,:,2)*obj.CR_bodies(:,:,2)*obj.C_joints(:,:,3)*obj.CR_bodies(:,:,3)*(obj.pos_bodies(:,4)+obj.CR_bodies(:,:,4)*obj.pos_joints(:,4)+obj.C_joints(:,:,4)*obj.CR_bodies(:,:,4)*obj.foot_vec)-M(4)*obj.cum_C_joints(:,:,1)*C_def(:,:,2)*obj.CR_bodies(:,:,2)*obj.C_joints(:,:,3)*obj.CR_bodies(:,:,3)*obj.C_joints(:,:,4)*obj.CR_bodies(:,:,4)*(obj.pos_joints(:,4)+obj.foot_vec));...
+                    [0 1 0]*((M(1)+M(2))*obj.cum_C_joints(:,:,2)*C_def(:,:,3)*obj.CR_bodies(:,:,3)*obj.pos_joints(:,3)-(M(1)+M(2)+M(3))*obj.cum_C_joints(:,:,2)*C_def(:,:,3)*obj.CR_bodies(:,:,3)*(obj.pos_bodies(:,4)+obj.CR_bodies(:,:,4)*obj.pos_joints(:,4)+obj.C_joints(:,:,4)*obj.CR_bodies(:,:,4)*obj.foot_vec)-M(4)*obj.cum_C_joints(:,:,2)*C_def(:,:,3)*obj.CR_bodies(:,:,3)*obj.C_joints(:,:,4)*obj.CR_bodies(:,:,4)*(obj.pos_joints(:,4)+obj.foot_vec));...
+                    [0 1 0]*(-(M(1)+M(2)+M(3)+M(4))*obj.cum_C_joints(:,:,3)*C_def(:,:,4)*obj.CR_bodies(:,:,4)*(obj.pos_joints(:,4)+obj.foot_vec))];
+            end
+            
+            if phase == 2
+                %%% EOM for Swing phase
+                %%% Velocity factor of each body
+                R1 = obj.cum_C_joints(:,:,1)*C_def(:,:,2)*obj.CR_bodies(:,:,2)*(obj.pos_joints(:,2)-obj.pos_bodies(:,3)-(eye(3)-obj.C_joints(:,:,3))*obj.CR_bodies(:,:,3)*obj.pos_joints(:,3)-obj.C_joints(:,:,3)*obj.CR_bodies(:,:,3)*obj.pos_bodies(:,4)-obj.C_joints(:,:,3)*obj.CR_bodies(:,:,3)*obj.CR_bodies(:,:,4)*obj.pos_joints(:,4)-obj.C_joints(:,:,3)*obj.CR_bodies(:,:,3)*obj.C_joints(:,:,4)*obj.CR_bodies(:,:,4)*obj.foot_vec);
+                L21 = R1-obj.cum_C_joints(:,:,1)*C_def(:,:,2)*obj.CR_bodies(:,:,2)*obj.pos_joints(:,2);
+                R2 = obj.cum_C_joints(:,:,2)*C_def(:,:,3)*obj.CR_bodies(:,:,3)*(obj.pos_joints(:,3)-obj.pos_bodies(:,4)-obj.CR_bodies(:,:,4)*obj.pos_joints(:,4)-obj.C_joints(:,:,4)*obj.CR_bodies(:,:,4)*obj.foot_vec);
+                L31 = L21+obj.cum_C_joints(:,:,1)*C_def(:,:,2)*obj.CR_bodies(:,:,2)*(obj.pos_bodies(:,3)+(eye(3)-obj.C_joints(:,:,3))*obj.CR_bodies(:,:,3)*obj.pos_joints(:,3));
+                L32 = R2-obj.cum_C_joints(:,:,2)*C_def(:,:,3)*obj.CR_bodies(:,:,3)*obj.pos_joints(:,3);
+                R3 = -obj.cum_C_joints(:,:,3)*C_def(:,:,4)*obj.CR_bodies(:,:,4)*obj.foot_vec;
+                L41 = -obj.cum_C_joints(:,:,1)*C_def(:,:,2)*obj.CR_bodies(:,:,2)*obj.C_joints(:,:,3)*obj.CR_bodies(:,:,3)*obj.C_joints(:,:,4)*obj.CR_bodies(:,:,4)*obj.foot_vec;
+                L42 = -obj.cum_C_joints(:,:,2)*C_def(:,:,3)*obj.CR_bodies(:,:,3)*obj.C_joints(:,:,4)*obj.CR_bodies(:,:,4)*obj.foot_vec;
+                
+                %%%Double dot factor
+                R11 = obj.cum_C_joints(:,:,1)*C_dot(:,:,2)*obj.CR_bodies(:,:,2)*(obj.pos_joints(:,2)-obj.pos_bodies(:,3)-(eye(3)-obj.C_joints(:,:,3))*obj.CR_bodies(:,:,3)*obj.pos_joints(:,3)-obj.C_joints(:,:,3)*obj.CR_bodies(:,:,3)*obj.pos_bodies(:,4)-obj.C_joints(:,:,3)*obj.CR_bodies(:,:,3)*obj.CR_bodies(:,:,4)*obj.pos_joints(:,4)-obj.C_joints(:,:,3)*obj.CR_bodies(:,:,3)*obj.C_joints(:,:,4)*obj.CR_bodies(:,:,4)*obj.foot_vec);
+                R12 = obj.cum_C_joints(:,:,1)*C_def(:,:,2)*obj.CR_bodies(:,:,2)*C_def(:,:,3)*obj.CR_bodies(:,:,3)*(obj.pos_joints(:,3)-obj.pos_bodies(:,4)-obj.CR_bodies(:,:,4)*obj.pos_joints(:,4)-obj.C_joints(:,:,4)*obj.CR_bodies(:,:,4)*obj.foot_vec);
+                R13 = -obj.cum_C_joints(:,:,1)*C_def(:,:,2)*obj.CR_bodies(:,:,2)*obj.C_joints(:,:,3)*obj.CR_bodies(:,:,3)*C_def(:,:,4)*obj.CR_bodies(:,:,4)*obj.foot_vec;
+                R22 = obj.cum_C_joints(:,:,2)*C_dot(:,:,3)*obj.CR_bodies(:,:,3)*(obj.pos_joints(:,3)-obj.pos_bodies(:,4)-obj.CR_bodies(:,:,4)*obj.pos_joints(:,4)-obj.C_joints(:,:,4)*obj.CR_bodies(:,:,4)*obj.foot_vec);
+                R23 = -obj.cum_C_joints(:,:,2)*C_def(:,:,3)*obj.CR_bodies(:,:,3)*C_def(:,:,4)*obj.CR_bodies(:,:,4)*obj.foot_vec;
+                R33 = -obj.cum_C_joints(:,:,3)*C_dot(:,:,4)*obj.CR_bodies(:,:,4)*obj.foot_vec;
+                
+                L211 = R11-obj.cum_C_joints(:,:,1)*C_dot(:,:,2)*obj.CR_bodies(:,:,2)*obj.pos_joints(:,2);  
+                L311 = L211+obj.cum_C_joints(:,:,1)*C_dot(:,:,2)*obj.CR_bodies(:,:,2)*(obj.pos_bodies(:,3)+(eye(3)-obj.C_joints(:,:,3))*obj.CR_bodies(:,:,3)*obj.pos_joints(:,3));
+                L312 = R12-obj.cum_C_joints(:,:,1)*C_dot(:,:,2)*obj.CR_bodies(:,:,2)*C_def(:,:,3)*obj.CR_bodies(:,:,3)*obj.pos_joints(:,3);
+                L322 = R22 - obj.cum_C_joints(:,:,2)*C_dot(:,:,3)*obj.CR_bodies(:,:,3)*obj.pos_joints(:,3);
+                L411 = -obj.cum_C_joints(:,:,1)*C_dot(:,:,2)*obj.CR_bodies(:,:,2)*obj.C_joints(:,:,3)*obj.CR_bodies(:,:,3)*obj.C_joints(:,:,4)*obj.CR_bodies(:,:,4)*obj.foot_vec;
+                L412 = -obj.cum_C_joints(:,:,1)*C_def(:,:,2)*obj.CR_bodies(:,:,2)*C_def(:,:,3)*obj.CR_bodies(:,:,3)*obj.C_joints(:,:,4)*obj.CR_bodies(:,:,4)*obj.foot_vec;
+                L422 = -obj.cum_C_joints(:,:,2)*C_dot(:,:,3)*obj.CR_bodies(:,:,3)*obj.C_joints(:,:,4)*obj.CR_bodies(:,:,4)*obj.foot_vec;
+                  
+                % The Inertia Matrix
+                Inertia = [M(2)*(L21'*L21)+M(3)*(L31'*L31)+M(4)*(L41'*L41), M(2)*L21'*R2+M(3)*L31'*L32+M(4)*L41'*L42, M(2)*L21'*R3+M(3)*L31'*R3+M(4)*L41'*R3;...
+                           M(2)*L21'*R2+M(3)*L31'*L32+M(4)*L41'*L42, M(2)*(R2'*R2)+M(3)*(L32'*L32)+M(4)*(L42'*L42), M(2)*R2'*R3+M(3)*L32'*R3+M(4)*L42'*R3;...
+                           M(2)*L21'*R3+M(3)*L31'*R3+M(4)*L41'*R3, M(2)*R2'*R3+M(3)*L32'*R3+M(4)*L42'*R3, (M(2)+M(3)+M(4))*(R3'*R3)];
+                
+                % Nonhomo Inertia Matrix
+                Int = [2*M(2)*L21'*L211+2*M(3)*L31'*L311+2*M(4)*L41'*L411, M(2)*(3*L21'*R12+L211'*R2)+M(3)*(3*L31'*L312+L311'*L32)+M(4)*(3*L41'*L412+L411'*L42), M(2)*(3*L21'*R13+L211'*R3)+M(3)*(3*L31'*R13+L311'*R3)+M(4)*(3*L41'*R13+L411'*R3), M(2)*R12'*R2+M(2)*L21'*R22+M(3)*(L312'*L32+L322'*L31)+M(4)*(L412'*L42+L422'*L41), M(2)*(R13'*R2+R12'*R3)+2*M(2)*L21'*R23+M(3)*(R13'*L32+2*L31'*R23+L312'*R3)+M(4)*(R13'*L42+2*R23'*L41+L412'*R3), M(2)*(R13'*R3+L21'*R33)+M(3)*(R13'*R3+L31'*R33)+M(4)*(R13'*R3+L41'*R33);...
+                       M(2)*(L21'*R12+L211'*R2)+M(3)*(L31'*L312+L32'*L311)+M(4)*(L41'*L412+L42'*L411),M(2)*(3*R2'*R12+L21'*R22)+M(3)*(3*L32'*L312+L31'*L322)+M(4)*(3*L42'*L412+L41'*L422),M(2)*(L21'*R23+2*R2'*R13+R3'*R12)+M(3)*(L31'*R23+2*L32'*R13+R3'*L312)+M(4)*(L41'*R23+2*L42'*R13+R3'*L412), 2*M(2)*R2'*R22+2*M(3)*L32'*L322+2*M(4)*L42'*L422, M(2)*(3*R2'*R23+R3'*R22)+M(3)*(3*L32'*R23+R3'*L322)+M(4)*(3*L42'*R23+R3'*L422), (M(2)+M(3)+M(4))*R3'*R23+M(2)*R2'*R33+M(3)*L32'*R33+M(4)*L42'*R33;...
+                       M(2)*(L211'*R3+L21'*R13)+M(3)*(L311'*R3+L31'*R13)+M(4)*(L411'*R3+L41'*R13), M(2)*(2*R12'*R3+R2'*R13+L21'*R23)+M(3)*(2*L312'*R3+L31'*R23+L32'*R13)+M(4)*(2*L412'*R3+L41'*R23+L42'*R13), 3*(M(2)+M(3)+M(4))*R3'*R13+M(2)*L21'*R33+M(3)*L31'*R33+M(4)*L41'*R33, M(2)*(R22'*R3+R23'*R2)+M(3)*(L322'*R3+L32'*R23)+M(4)*(L422'*R3+L42'*R23), 3*(M(2)+M(3)+M(4))*R3'*R23+M(2)*R2'*R33+M(3)*L32'*R33+M(4)*L42'*R33, 2*(M(2)+M(3)+M(4))*R3'*R33];
+                
+                % The Momentum Matrix
+                Moment = [M(2)*L21'*L211+M(3)*L31'*L311+M(4)*L41'*L411, M(2)*(L21'*R12+L211'*R2)+M(3)*(L31'*L312+L311'*L32)+M(4)*(L41'*L412+L411'*L42), M(2)*(L21'*R13+L211'*R3)+M(3)*(L31'*R13+L311'*R3)+M(4)*(L41'*R13+L411'*R3), M(2)*R12'*R2+M(3)*L312'*L32+M(4)*L412'*L42, M(2)*(R13'*R2+R12'*R3)+M(3)*(R13'*L32+L312'*R3)+M(4)*(R13'*L42+L412'*R3), (M(2)+M(3)+M(4))*R3'*R13;...
+                          M(2)*L21'*R12+M(3)*L31'*L312+M(4)*L41'*L412, M(2)*(R2'*R12+L21'*R22)+M(3)*(L32'*L312+L31'*L322)+M(4)*(L42'*L412+L41'*L422), M(2)*(L21'*R23+R3'*R12)+M(3)*(L31'*R23+R3'*L312)+M(4)*(L41'*R23+R3'*L412), M(2)*R2'*R22+M(3)*L32'*L322+M(4)*L42'*L422, M(2)*(R2'*R23+R3'*R22)+M(3)*(L32'*R23+R3'*L322)+M(4)*(L42'*R23+R3'*L422), (M(2)+M(3)+M(4))*R3'*R23;...
+                          M(2)*L21'*R13+M(3)*L31'*R13+M(4)*L41'*R13, M(2)*(R2'*R13+L21'*R23)+M(3)*(L32'*R13+L31'*R23)+M(4)*(L42'*R12+L41'*R23), M(2)*(L21'*R33+R3'*R13)+M(3)*(L31'*R33+R3'*R13)+M(4)*(L41'*R33+R3'*R13), M(2)*R2'*R23+M(3)*L32'*R23+M(4)*L42'*R23, M(2)*(R2'*R33+R3'*R23)+M(3)*(L32'*R33+R3'*R23)+M(4)*(L42'*R33+R3'*R23), (M(2)+M(3)+M(4))*R3'*R33];
+                
+                % The Gravitational Matrix   
+                Grav = 9.81*[[0 1 0]*(-M(2)*obj.cum_C_joints(:,:,1)*C_def(:,:,2)*obj.CR_bodies(:,:,2)*(obj.pos_bodies(:,3)+(eye(3)-obj.C_joints(:,:,3))*obj.CR_bodies(:,:,3)*obj.pos_joints(:,3))-(M(2)+M(3))*obj.cum_C_joints(:,:,1)*C_def(:,:,2)*obj.CR_bodies(:,:,2)*obj.C_joints(:,:,3)*obj.CR_bodies(:,:,3)*(obj.pos_bodies(:,4)+obj.CR_bodies(:,:,4)*obj.pos_joints(:,4)+obj.C_joints(:,:,4)*obj.CR_bodies(:,:,4)*obj.foot_vec)-M(4)*obj.cum_C_joints(:,:,1)*C_def(:,:,2)*obj.CR_bodies(:,:,2)*obj.C_joints(:,:,3)*obj.CR_bodies(:,:,3)*obj.C_joints(:,:,4)*obj.CR_bodies(:,:,4)*(obj.pos_joints(:,4)+obj.foot_vec));...
+                    [0 1 0]*(M(2)*obj.cum_C_joints(:,:,2)*C_def(:,:,3)*obj.CR_bodies(:,:,3)*obj.pos_joints(:,3)-(M(2)+M(3))*obj.cum_C_joints(:,:,2)*C_def(:,:,3)*obj.CR_bodies(:,:,3)*(obj.pos_bodies(:,4)+obj.CR_bodies(:,:,4)*obj.pos_joints(:,4)+obj.C_joints(:,:,4)*obj.CR_bodies(:,:,4)*obj.foot_vec)-M(4)*obj.cum_C_joints(:,:,2)*C_def(:,:,3)*obj.CR_bodies(:,:,3)*obj.C_joints(:,:,4)*obj.CR_bodies(:,:,4)*(obj.pos_joints(:,4)+obj.foot_vec));...
+                    [0 1 0]*(-(M(2)+M(3)+M(4))*obj.cum_C_joints(:,:,3)*C_def(:,:,4)*obj.CR_bodies(:,:,4)*(obj.pos_joints(:,4)+obj.foot_vec))];
+            end
+%             keyboard
+        end
+        %% Calculate Swing Torque
+        function [Inertia,Grav] = compute_Swing(obj,theta)
+            % This section used to calculate the intertia forces and
+            % gravitational forces of leg during swing.
+            % The output Inertia is the inertia matrix, should times
+            % acceleration be become forces.
+            
+            if length(theta) == obj.num_bodies - 1
+                theta = [0;theta];
+            elseif length(theta) == obj.num_bodies
+                %Do Nothing!
+            elseif isempty(theta)
+                theta = zeros(obj.num_bodies,1);
+            else
+                disp('Orientation vector is not proper length.Should be a nx1 vector where n=num_bodies (first element is time)')
+                Inertia = -1;
+                Grav = -1;
+                return
+            end
+                       
+            % First let's get the mass of each segment in Kg
+            M = zeros((obj.num_bodies-1),1); % Mass matrix
+            for i = 2:obj.num_bodies
+                % Find the right body
+                body_found = contains(obj.original_text,['<Name>',obj.bodies{i},'</Name>']);
+                next_body_ind = find(body_found,1,'first');
+                chain_lower_limit = next_body_ind;
+                % Searching for the mass
+                mass_found = contains(obj.original_text(chain_lower_limit:end),'<Mass>');
+                mass_ind = find(mass_found,1,'first') + chain_lower_limit - 1;
+                mass = obj.original_text(mass_ind);
+                % Extract the value 
+                mass = strrep(mass,'<Mass>','');
+                mass = strrep(mass,'</Mass>','');
+                obj.joint_obj{i}.m = str2double(mass)/1000;
+                M(i-1) = str2double(mass)/1000;
+            end
+            
+            %%% Now calculate EOM
+            r_N = zeros(3,obj.num_bodies);         % Bodies world position
+            j_N = zeros(3,obj.num_bodies-1);       % Joint world position
+            obj.cum_C_joints = zeros(size(obj.C_joints));
+            C_def = obj.cum_C_joints;
+            obj.cum_C_joints(:,:,1) = eye(3)*obj.CR_bodies(:,:,1);
+            
+            for i=2:obj.num_bodies
+                % Rotate Matrix based on theta
+                u = obj.CR_bodies(:,:,i)*obj.CR_joints(:,:,i)*[-1;0;0];
+                obj.C_joints(:,:,i) = [cos(theta(i))+u(1)^2*(1-cos(theta(i))),u(1)*u(2)*(1-cos(theta(i)))-u(3)*sin(theta(i)),u(1)*u(3)*(1-cos(theta(i)))+u(2)*sin(theta(i));u(2)*u(1)*(1-cos(theta(i)))+u(3)*sin(theta(i)),cos(theta(i))+u(2)^2*(1-cos(theta(i))),u(2)*u(3)*(1-cos(theta(i)))-u(1)*sin(theta(i));u(3)*u(1)*(1-cos(theta(i)))-u(2)*sin(theta(i)),u(3)*u(2)*(1-cos(theta(i)))+u(1)*sin(theta(i)),cos(theta(i))+u(3)^2*(1-cos(theta(i)))];
+                obj.cum_C_joints(:,:,i) = obj.cum_C_joints(:,:,i-1)*obj.C_joints(:,:,i)*obj.CR_bodies(:,:,i);
+                C_def(:,:,i) = [sin(theta(i))*(u(1)^2-1),u(1)*u(2)*sin(theta(i))-u(3)*cos(theta(i)),u(1)*u(3)*sin(theta(i))+u(2)*cos(theta(i));u(1)*u(2)*sin(theta(i))+u(3)*cos(theta(i)),sin(theta(i))*(u(2)^2-1),u(2)*u(3)*sin(theta(i))-u(1)*cos(theta(i));u(3)*u(1)*sin(theta(i))-u(2)*cos(theta(i)),u(3)*u(2)*sin(theta(i))+u(1)*cos(theta(i)),sin(theta(i))*(u(3)^2-1)];
+               
+                % j_N is the "World Position" in Animatlab of each joint. 
+                j_N(:,i-1) = r_N(:,i-1)+obj.cum_C_joints(:,:,i-1)*obj.pos_bodies(:,i)+obj.cum_C_joints(:,:,i-1)*obj.CR_bodies(:,:,i)*obj.pos_joints(:,i);
+                % r_N is the "World Position" in Animatlab of each body
+                r_N(:,i) = j_N(:,i-1)-obj.cum_C_joints(:,:,i)*obj.pos_joints(:,i);
+            end
+            
+            % Calculate the length of the sigment
+            R1 = norm(r_N(:,2)-j_N(:,1)); 
+            L1 = norm(r_N(:,3)-j_N(:,1)); 
+            R2 = norm(r_N(:,3)-j_N(:,2)); 
+            L21 = norm(r_N(:,4)-j_N(:,1)); 
+            L22 = norm(r_N(:,4)-j_N(:,2)); 
+            R3 = norm(r_N(:,4)-j_N(:,3)); 
+            
+            if ~obj.toe_pos_known
+                toe_pos = [-17.708;-73.113;-21.412]/1000 - [-22.027;-63.924;-21.424]/1000; %Local position of the toe.
+                obj.foot_vec = obj.Cabs_bodies(:,:,end)'*toe_pos;
+            end
+            obj.toe_pos_known = 1;
+            
+            % The Inertia Matrix 
+            Inertia = [ M(1)*R1^2 + M(2)*L1^2 + M(3)*L21^2, M(2)*L1*R2 + M(3)*L21*L22,  M(3)*L21*R3;...
+                        M(2)*L1*R2 + M(3)*L21*L22, M(2)*R2^2 + M(3)*L22^2, M(3)*L22*R3;...
+                        M(3)*L21*R3, M(3)*L22*R3, M(3)*R3^2];
+                    
+              Grav = 9.81*[[0 1 0]*(-M(1)*obj.cum_C_joints(:,:,1)*C_def(:,:,2)*obj.CR_bodies(:,:,2)*(obj.pos_bodies(:,3)+(eye(3)-obj.C_joints(:,:,3))*obj.CR_bodies(:,:,3)*obj.pos_joints(:,3))-(M(1)+M(2))*obj.cum_C_joints(:,:,1)*C_def(:,:,2)*obj.CR_bodies(:,:,2)*obj.C_joints(:,:,3)*obj.CR_bodies(:,:,3)*(obj.pos_bodies(:,4)+obj.CR_bodies(:,:,4)*obj.pos_joints(:,4)+obj.C_joints(:,:,4)*obj.CR_bodies(:,:,4)*obj.foot_vec)-M(3)*obj.cum_C_joints(:,:,1)*C_def(:,:,2)*obj.CR_bodies(:,:,2)*obj.C_joints(:,:,3)*obj.CR_bodies(:,:,3)*obj.C_joints(:,:,4)*obj.CR_bodies(:,:,4)*(obj.pos_joints(:,4)+obj.foot_vec));...
+                    [0 1 0]*(M(1)*obj.cum_C_joints(:,:,2)*C_def(:,:,3)*obj.CR_bodies(:,:,3)*obj.pos_joints(:,3)-(M(1)+M(2))*obj.cum_C_joints(:,:,2)*C_def(:,:,3)*obj.CR_bodies(:,:,3)*(obj.pos_bodies(:,4)+obj.CR_bodies(:,:,4)*obj.pos_joints(:,4)+obj.C_joints(:,:,4)*obj.CR_bodies(:,:,4)*obj.foot_vec)-M(3)*obj.cum_C_joints(:,:,2)*C_def(:,:,3)*obj.CR_bodies(:,:,3)*obj.C_joints(:,:,4)*obj.CR_bodies(:,:,4)*(obj.pos_joints(:,4)+obj.foot_vec));...
+                    [0 1 0]*(-(M(1)+M(2)+M(3))*obj.cum_C_joints(:,:,3)*C_def(:,:,4)*obj.CR_bodies(:,:,4)*(obj.pos_joints(:,4)+obj.foot_vec))];
 %             keyboard
         end
         %% Calculate JTF
@@ -1100,8 +1360,265 @@ classdef Leg < matlab.mixin.SetGet
                 keyboard
             end
         end
+        %% Calculate a single muscle's moment arms for instants
+        function [mom_arm_inst_length] = compute_muscle_moment_arm(obj,step_ind,joint,axis,muscle)
+            % I don't know if this is right or wrong, but for here I start
+            % to set up the muscle length change only happens between
+            % attachments from different body part. So basicly I calculate
+            % the muscle moment arm base on those attachments.
+            
+            if muscle.pos_attachments{1,3} > joint || muscle.pos_attachments{end,3} < joint
+                disp('This muscle may not bridge the joint specified')
+                mom_arm_inst_length = -1;
+                return
+            end
+            
+            % First find out the muscle segment that we are interesed             
+            for i = 1:size(muscle.pos_attachments,1)-1
+                if muscle.pos_attachments{i,3}<=joint && muscle.pos_attachments{i+1,3} > joint
+                    origin = muscle.pos_attachments{i,4}(step_ind,:);
+                    insert = muscle.pos_attachments{i+1,4}(step_ind,:);
+                end
+            end
+            
+            muscle_vec = insert-origin;
+            joint_pos = obj.joint_obj{joint+1}.joint_motion(step_ind,:);
+            origin_rel = origin - joint_pos;
+            
+            [mom_arm_inst_length] = obj.vector_distance(axis,muscle_vec,origin_rel);
+            
+%             % Test file, to see if the different vector and project or not
+%             % affects the results. It turns out there is no difference;
+%             insert_rel = insert - joint_pos;
+%             [distance2] = obj.vector_distance(axis,muscle_vec,insert_rel);
+%             
+%             % Project the origin and insertion point on to plane perpendicular to the joint axis
+%             origin_proj = origin_rel- dot(origin_rel,axis')/norm(axis)^2*axis';
+%             insert_proj = insert_rel- dot(insert_rel,axis')/norm(axis)^2*axis';
+%             muscle_proj = insert_proj-origin_proj;
+%             
+%             [distance3] = obj.vector_distance(axis,muscle_proj,origin_proj);
+%             [distance4] = obj.vector_distance(axis,muscle_proj,insert_proj);
+        end
+        %% Calculate the Muscle Moment arms for joint
+        function [moment_arm_profile,moment_arm_length_profile] = compute_joint_moment_arm(obj,to_plot)
+            
+            % Initializing
+            num_loops = length(obj.theta_motion);
+            moment_arm_profile = cell(obj.num_bodies-1,2); % Sort out joint related muscle, ext in Col1, flx in Col2
+            
+            % Firstly let's sort out how muscles are related to the joints.
+            for i = 1:length(obj.musc_obj)
+                % Extract string of attachment for ith muscle;
+                attach_string = [];
+                for j = 1:size(obj.musc_obj{i}.pos_attachments,1)
+                   attach_string = [attach_string,obj.musc_obj{i}.pos_attachments{j,2}];
+                end
+                
+                % Categorize muscle into related joint.
+                if any(contains(attach_string,'HipZ Ext'))
+                    moment_arm_profile{1,1}(end+1) = i;
+                elseif any(contains(attach_string,'HipZ Flx'))
+                    moment_arm_profile{1,2}(end+1) = i;
+                end
+                
+                if any(contains(attach_string,'Knee Ext'))
+                    moment_arm_profile{2,1}(end+1) = i;
+                elseif any(contains(attach_string,'Knee Flx'))
+                    moment_arm_profile{2,2}(end+1) = i;
+                end
+                
+                if any(contains(attach_string,'AnkleZ Ext'))
+                    moment_arm_profile{3,1}(end+1) = i;
+                elseif any(contains(attach_string,'AnkleZ Flx'))
+                    moment_arm_profile{3,2}(end+1) = i;
+                end              
+            end
+            
+            %% Now Calulate Muscle Moment arms for a step loop
+            moment_arm_length_profile = moment_arm_profile;
+            
+            % Loop through every timestep of walking
+            for i = 1:num_loops
+                % Calculating the Jacobian 
+                [J,~] = obj.compute_jac(obj.theta_motion(i,:)');
+
+                % Calculate muscle moment arms for instants timestep
+                for j = 1:obj.num_bodies-1
+                    % rotation axis for the jth joints
+                    omega(:,j) = J(4:6,j);
+                    
+                    % For extensor
+                    for k = 1:length(moment_arm_profile{j,1})
+                        ext_in = moment_arm_profile{j,1}(k);
+                        ext_mail = obj.compute_muscle_moment_arm(i,j,omega(:,j),obj.musc_obj{ext_in});
+                        moment_arm_length_profile{j,1}(i,k) = ext_mail;
+                    end  
+                    
+                    % For Flexor
+                    for k = 1:length(moment_arm_profile{j,2})
+                        flx_in = moment_arm_profile{j,2}(k);
+                        flx_mail = obj.compute_muscle_moment_arm(i,j,omega(:,j),obj.musc_obj{flx_in});
+                        moment_arm_length_profile{j,2}(i,k) = flx_mail;
+                    end
+                end 
+            end
+            
+            %% Plot the Moment arms for related joints
+            if to_plot ==1
+                T = {'Hip';'Knee';'Ankle'};
+                for i = 1:obj.num_bodies-1
+                    for j = 1: length(moment_arm_profile{i,1})
+                        subplot (2,3,i)
+                        plot(moment_arm_length_profile{i,1}(:,j)*1000);
+                        hold on
+                    end
+                    title(T{i})
+                    for j = 1: length(moment_arm_profile{i,2})
+                        subplot (2,3,i+3)
+                        plot(moment_arm_length_profile{i,2}(:,j)*1000);
+                        hold on
+                    end
+                end
+            end   
+            
+            if to_plot == 2
+                % for BFA
+                BFA_length = moment_arm_length_profile{1,1}(:,1);
+                BFA_to_femur = BFA_length *1000/35.8;
+                [~,max_ind] = max(obj.theta_motion(:,1));
+                [~,min_ind] = min(obj.theta_motion(:,1));
+                BFA_angle = -BFA_to_femur(max_ind:min_ind);
+                BFA=interp1(linspace(0,1,length(BFA_angle)),BFA_angle,linspace(0,1,81));
+                angle = -30:1:50;
+                
+                plot(angle,BFA)
+                ylim([-0.4 0.2])
+                title('Biceps Femoris Anterior')
+            end    
+            
+            if to_plot == 3
+                % for TA
+                TA_length = moment_arm_length_profile{3,2};
+                TA_to_femur = TA_length *1000/35.8;
+                [~,max_ind] = max(obj.theta_motion(:,3));
+                [~,min_ind] = min(obj.theta_motion(:,3));
+                TA_angle = -TA_to_femur(max_ind:min_ind);
+                TA=interp1(linspace(0,1,length(TA_angle)),TA_angle,linspace(0,1,101));
+                angle = -50:1:50;
+                
+                plot(angle,TA)
+                ylim([-0.05 0.15])
+                title('Tibialis Anterior')
+            end
+%             keyboard
+            close all
+        end
         %% Calculate MN activation during walking
         function compute_MN_act_for_motion(obj,to_plot)
+            %Using data built into the object, compute the muscle forces
+            %necessary to generate known torques at known positions and
+            %velocities.
+            
+            if isempty(obj.torque_motion) || isempty(obj.theta_motion) || isempty(obj.theta_dot_motion)
+                disp('call Joint.set_torque_and_kinematic_data()')
+            end
+            
+            % Calculate Muscle Moment arms for all the joints
+            [moment_arm_profile,moment_arm_length_profile] = obj.compute_joint_moment_arm(to_plot);
+            
+            % Torque splits for each joint for every time step
+            num_loops = length(obj.theta_motion);
+            num_muscle = length(obj.musc_obj);
+           
+            for i = 1:num_loops
+%                 % Test field
+%                 H = [moment_arm_length_profile{1,1}(i,1) moment_arm_length_profile{1,1}(i,2) 0 0 0 0 moment_arm_length_profile{1,2}(i,1) moment_arm_length_profile{1,2}(i,2)];
+%                 K = [0 moment_arm_length_profile{2,2}(i,1) moment_arm_length_profile{2,1}(i,1) moment_arm_length_profile{2,2}(i,2) 0 0 0 moment_arm_length_profile{2,1}(i,2)];
+%                 A = [0 0 0 moment_arm_length_profile{3,1}(i,1) moment_arm_length_profile{3,2}(i,1) moment_arm_length_profile{3,1}(i,2) 0 0];
+%                 M = [H;K;A];
+%                 Ten= M\obj.torque_motion(i,:)';
+%                 Muscle_tension(i,:) = Ten';
+                
+                syms T [num_muscle 1]
+                for j = 1:obj.num_bodies-1
+                    Torque_des = obj.torque_motion(i,j);
+                    musc_ind = [moment_arm_profile{j,1},moment_arm_profile{j,2}];
+                    moment_arm = [moment_arm_length_profile{j,1}(i,:),moment_arm_length_profile{j,2}(i,:)];
+                    F(j) = moment_arm*T(musc_ind)-Torque_des;
+                end
+                keyboard
+            end
+            keyboard
+        end
+        %% Load Neurons from the sim File into objective
+        function load_neurons(obj)
+            % There is three layer of SNS. the RG, the PF, and the MN, so
+            % start with setting up the SNS.
+            
+            %%%Pull the neuron from the sim file
+            neuron_found = contains(obj.original_text,'<Neuron>');
+            neuron_inds = find(neuron_found);
+            neuron_name_inds = neuron_inds+2;
+            
+            name_true = 1;
+            
+            for i=2:obj.num_bodies-1
+                if ~strcmp(obj.joints{i}(1:2),obj.joints{i+1}(1:2))
+                    name_true = 0;
+                end
+            end
+            
+            if name_true
+                leg_name = obj.joints{2}(1:2);
+            else
+                leg_name = input('What is the prefix of objects belonging to this leg?\nA cell array of prefixes may be entered. ');
+            end
+            
+            if ischar(leg_name)
+                neuron_for_this_leg = strfind(obj.original_text(neuron_name_inds),['<Name>',leg_name]);
+            elseif iscell(leg_name)
+                neuron_for_this_leg = cell(length(neuron_name_inds),1);
+                for i=1:length(leg_name)
+                    temp_neuron_for_this_leg = strfind(obj.original_text(neuron_name_inds),['<Name>',leg_name{i}]);
+                    for j=1:length(temp_neuron_for_this_leg)
+                        if ~isempty(temp_neuron_for_this_leg{j})
+                            neuron_for_this_leg{j} = 1;
+                        end
+                    end
+                end
+            end
+            
+            %Logically pick all the Neuron from this leg
+            neuron_for_this_leg_inds = cellfun(@isempty,neuron_for_this_leg) == 0;
+            
+            %These are the indices of the names of muscles.
+            obj.neur_inds = neuron_name_inds(neuron_for_this_leg_inds);
+            
+            %Find names of neurons.
+            neuron_names = obj.original_text(obj.neur_inds);
+            for i=1:length(neuron_names)
+                neuron_names{i} = strrep(neuron_names{i},'<Name>','');
+                neuron_names{i} = strrep(neuron_names{i},'</Name>','');
+            end
+           
+            % Assorting the neurons into 3 Layer
+            RG_neurons_inds = contains(neuron_names,'RG');
+            PF_neurons_inds = contains(neuron_names,'PF');
+            MN_neurons_inds = logical(1- RG_neurons_inds-PF_neurons_inds);
+            
+            RG_neurons = neuron_names(RG_neurons_inds);
+            PF_neurons = neuron_names(PF_neurons_inds);
+            MN_neurons = neuron_names(MN_neurons_inds);
+            
+            %%% Saving information into SNS objective   
+            obj.neur_obj = cell(3,1);
+            obj.neur_obj{1} = sort(RG_neurons);
+            obj.neur_obj{2} = sort(PF_neurons);
+            obj.neur_obj{3} = sort(MN_neurons);
+        end
+        %% Design Sypnase connectivity that transmitt signal between neurons
+        function design_synapse(obj)
             keyboard
         end
         
@@ -1112,7 +1629,7 @@ classdef Leg < matlab.mixin.SetGet
             num_musc = length(obj.musc_inds);
             load('AnimatlabProperties.mat');
             
-%             property_names = repmat(Properties{4,1}(:,1),num_musc,1);
+            %             property_names = repmat(Properties{4,1}(:,1),num_musc,1);
             property_names = Properties{4,1}(:,1);
             numProps = length(property_names);
             property_values = zeros(num_musc*numProps,1);
@@ -1120,7 +1637,7 @@ classdef Leg < matlab.mixin.SetGet
             
             %for each property
             for i=1:num_musc
-
+                
                 %Define its line as the "lower limit." All properties will be found
                 %below it.
                 lower_limit = obj.musc_inds(i);
@@ -1137,13 +1654,13 @@ classdef Leg < matlab.mixin.SetGet
                         prop_to_find = ['<',property_names{j},'>'];
                         which_to_find = 1;
                     end
-
+                    
                     %Find that string in the file, the first time after the lower limit
-                    %(where the named object is found). 
+                    %(where the named object is found).
                     
                     %prop_found = strfind(obj.original_text(lower_limit:end),prop_to_find);
                     prop_found = contains(obj.original_text(lower_limit:end),prop_to_find);
-
+                    
                     %Find the index at which this occurs, and save this for quick
                     %reference later. Remember that we were only examining
                     %original_text after the lower_limit, so we need to add that back
@@ -1152,14 +1669,14 @@ classdef Leg < matlab.mixin.SetGet
                     %temp = find(~cellfun(@isempty,prop_found)) + lower_limit - 1;
                     temp = find(prop_found) + lower_limit - 1;
                     property_inds(numProps*(i-1)+j,1) = temp(which_to_find);
-
+                    
                     %Find the final index of the row to keep before the number begins
                     %Number we're looking for is formatted like
                     %'<A>-0.04<A>'
                     %Index of > before the number we want
                     
                     property_inds(numProps*(i-1)+j,2) = length(prop_to_find);
-
+                    
                     %Find the first index of the row to keep after the number begins
                     %Index of < after number we want
                     property_inds(numProps*(i-1)+j,3) = cell2mat(strfind(obj.original_text(property_inds(numProps*(i-1)+j,1)),'</'));
@@ -1189,7 +1706,7 @@ classdef Leg < matlab.mixin.SetGet
                 obj.musc_obj{i}.damping = property_values(numProps*i-1);
                 obj.musc_obj{i}.max_force = property_values(numProps*i);
             end
-           
+            
             disp('end')
         end
         %% Function: Write Muscle Parameters to Animatlab
@@ -1227,23 +1744,23 @@ classdef Leg < matlab.mixin.SetGet
                         end
                     end
                 end
-            end            
+            end
             %Logically pick all the muscle from this leg
             muscle_indices = muscle_indices(musc_for_this_leg);
             
             %%% Parameters setting
             %Some paramters terms have placeholders because we want to write that parameter to our Matlab objects but not overwrite them in the simulation file
             parameter_terms = {'NamePlaceholder';...
-                               '<B Value';...
-                               '<Lwidth Value';...
-                               'VmaxPlaceHolder';...
-                               '<Kse Value';...
-                               '<Kpe Value';...
-                               '<B Value';...
-                               '<D Value';...
-                               '<LowerLimitScale Value';...
-                               '<UpperLimitScale Value';...
-                               '<RestingLength'};
+                '<B Value';...
+                '<Lwidth Value';...
+                'VmaxPlaceHolder';...
+                '<Kse Value';...
+                '<Kpe Value';...
+                '<B Value';...
+                '<D Value';...
+                '<LowerLimitScale Value';...
+                '<UpperLimitScale Value';...
+                '<RestingLength'};
             for i=1:num_muscles
                 parameters{1,1} = 'Muscle name';
                 parameters{i+1,1} = obj.musc_obj{i}.muscle_name;
@@ -1270,7 +1787,7 @@ classdef Leg < matlab.mixin.SetGet
                 for j=1:size(parameters,2)
                     lower_limit = muscle_indices(i);
                     scale = 1;
-                    if j ~= 1 && j ~= 4 
+                    if j ~= 1 && j ~= 4
                         if j == 7
                             %For some dumb reason, the creator fo Animatlab has two parameters named 'B'. In order to put damping in the right place, we have to
                             %skip over the first B.
@@ -1282,22 +1799,22 @@ classdef Leg < matlab.mixin.SetGet
                             prop_addresses = contains(project_file(lower_limit:end),parameter_terms{j});
                             lower_limit = find(prop_addresses,1,'first')+lower_limit;
                         end
-                    prop_addresses = contains(project_file(lower_limit:end),parameter_terms{j});
-                    prop_index = find(prop_addresses,1,'first')+lower_limit-1;
-                    %Find the line with the parameter
-                    line_of_interest = project_file{prop_index};
-                    if contains(line_of_interest,'None') == 1
-                    else
-                        if contains(line_of_interest,'milli') == 1
-                            scale = 1000;
-                        elseif contains(line_of_interest,'centi') == 1
-                            scale = 100;
+                        prop_addresses = contains(project_file(lower_limit:end),parameter_terms{j});
+                        prop_index = find(prop_addresses,1,'first')+lower_limit-1;
+                        %Find the line with the parameter
+                        line_of_interest = project_file{prop_index};
+                        if contains(line_of_interest,'None') == 1
+                        else
+                            if contains(line_of_interest,'milli') == 1
+                                scale = 1000;
+                            elseif contains(line_of_interest,'centi') == 1
+                                scale = 100;
+                            end
                         end
-                    end
-                    quotelocs = strfind(line_of_interest,'"');
-                    modified_line = strcat(line_of_interest(1:quotelocs(1)),num2str(parameters{i+1,j}),line_of_interest(quotelocs(2):quotelocs(end-1)),num2str(parameters{i+1,j}/scale),line_of_interest(quotelocs(end):end));
-                    %Replace the line with the modified parameter
-                    project_file{prop_index} = modified_line;
+                        quotelocs = strfind(line_of_interest,'"');
+                        modified_line = strcat(line_of_interest(1:quotelocs(1)),num2str(parameters{i+1,j}),line_of_interest(quotelocs(2):quotelocs(end-1)),num2str(parameters{i+1,j}/scale),line_of_interest(quotelocs(end):end));
+                        %Replace the line with the modified parameter
+                        project_file{prop_index} = modified_line;
                     end
                 end
             end
@@ -1352,16 +1869,17 @@ classdef Leg < matlab.mixin.SetGet
             
             for i = 1:num_steps
                 % Calculate Jac and toe position
-                [J,toe_position] = obj.compute_jac(obj.theta_motion(i,:)');
-                xt = toe_position(1);
-                yt = toe_position(2);
-                zt = toe_position(3);
+                [J,toe] = obj.compute_jac(obj.theta_motion(i,:)');
+                toe_position(i,:) = toe';
+                xt = toe(1);
+                yt = toe(2);
+                zt = toe(3);
                 
                 for j=1:obj.num_bodies-1
                     omega(:,j) = J(4:6,j);
                     W(:,j) = obj.joint_obj{j+1}.joint_motion(i,:)'+omega(:,j)*obj.vec_len;
                 end
-
+                
                 
                 
                 % Plot 3D motion
@@ -1381,8 +1899,9 @@ classdef Leg < matlab.mixin.SetGet
                 axis equal
                 axis([-0.03 0 -0.05 0.05 -0.07 0])
                 pbaspect([1 1 1])
-                view([-120 30])   
-                set(gcf,'Position',[400 300 700 600])  
+                %                 view([-120 30])
+                view([-90 0])
+                set(gcf,'Position',[400 300 700 600])
                 grid on
                 
                 % COM
@@ -1394,39 +1913,59 @@ classdef Leg < matlab.mixin.SetGet
                 text(W(3,1),W(1,1),W(2,1),'x','color','g');
                 text(W(3,2),W(1,2),W(2,2),'x','color','g');
                 text(W(3,3),W(1,3),W(2,3),'x','color','g')
-
-                L(i) = getframe;               
+                
+                L(i) = getframe;
             end
             movie(L,5,24)
+            keyboard
         end
         %% Function: Plot EOM
         function plot_EOM(obj,to_plot)
             % THis is for compare of two different method, EOM1 and EOME2
             % and plot the difference
             
-            % Initialization 
+%             to_plot = 2;
+            
+            % Initialization
             num_steps = length(obj.dt_motion);
             Sizer = zeros(num_steps,3);
-            IF1 = Sizer;
-            IF2 = Sizer;
-            GF1 = Sizer;
-            GF2 = Sizer;
+            IF = Sizer;
+            GF = Sizer;
             INF = Sizer;
             MF = Sizer;
             
             for i = 1:num_steps
-                %For EOM1
-                [Inertia,Grav] = obj.compute_EOM1(obj.theta_motion(i,:)');
-                IF1(i,:) = Inertia*obj.theta_doubledot_motion(i,:)';
-                GF1(i,:) = Grav;
-
-                %For EOM2
-                [Inertia,Int,Moment,Grav] = obj.compute_EOM2(obj.theta_motion(i,:)');
-                IF2(i,:) = Inertia*obj.theta_doubledot_motion(i,:)';
+                
                 NT = [obj.theta_dot_motion(i,1)^2;obj.theta_dot_motion(i,1)*obj.theta_dot_motion(i,2);obj.theta_dot_motion(i,1)*obj.theta_dot_motion(i,3);obj.theta_dot_motion(i,2)^2;obj.theta_dot_motion(i,2)*obj.theta_dot_motion(i,3);obj.theta_dot_motion(i,3)^2];
-                INF(i,:) = Int*NT;
-                MF(i,:) = Moment*NT;
-                GF2(i,:) = Grav;
+                
+                %                 %For EOM1
+                %                 [Inertia,Grav] = obj.compute_EOM1(obj.theta_motion(i,:)');
+                %                 IF(i,:) = Inertia*obj.theta_doubledot_motion(i,:)';
+                %                 GF(i,:) = Grav;
+                %
+                %                 %For EOM2
+                %                 [Inertia,Int,Moment,Grav] = obj.compute_EOM2(obj.theta_motion(i,:)');
+                %                 IF(i,:) = Inertia*obj.theta_doubledot_motion(i,:)';
+                %                 INF(i,:) = Int*NT;
+                %                 MF(i,:) = Moment*NT;
+                %                 GF(i,:) = Grav;
+                
+                %                 %For Ground walking
+                %                 if i <= num_steps/2
+                %                     [Pelvis(i,:),Inertia,Int,Moment,Grav] = obj.compute_ground_EOM(i,1);
+                %                 else
+                %                     [Pelvis(i,:),Inertia,Int,Moment,Grav] = obj.compute_ground_EOM(i,2);
+                % %                     [Inertia,Int,Moment,Grav] = obj.compute_EOM2(obj.theta_motion(i,:)');
+                %                 end
+                %                     IF(i,:) = Inertia*obj.theta_doubledot_motion(i,:)';
+                %                     INF(i,:) = Int*NT;
+                %                     MF(i,:) = Moment*NT;
+                %                     GF(i,:) = Grav;
+                
+                % For swing Torque
+                [Inertia,Grav] = obj.compute_Swing(obj.theta_motion(i,:)');
+                IF(i,:) = Inertia*obj.theta_doubledot_motion(i,:)';
+                GF(i,:) = Grav;
             end
             
             %~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1437,10 +1976,7 @@ classdef Leg < matlab.mixin.SetGet
                 figure(1)
                 for i = 1:obj.num_bodies-1
                     subplot(1,3,i)
-                    plot(IF1(:,i),'r','Linewidth',1.5)
-                    hold on
-                    plot(IF2(:,i),'b','Linewidth',1.5)
-                    hold off
+                    plot(IF(:,i),'b','Linewidth',1.5)
                     title(T{i});
                 end
                 suptitle('Intertia Force interms of Theta double dot')
@@ -1448,7 +1984,7 @@ classdef Leg < matlab.mixin.SetGet
                 figure(2)
                 for i = 1:obj.num_bodies-1
                     subplot(1,3,i)
-                    plot(INF(:,i),'Linewidth',1.5)
+                    plot(INF(:,i),'b','Linewidth',1.5)
                     title(T{i});
                 end
                 suptitle('Intertia Force interms of Theta double multiple ')
@@ -1456,7 +1992,7 @@ classdef Leg < matlab.mixin.SetGet
                 figure(3)
                 for i = 1:obj.num_bodies-1
                     subplot(1,3,i)
-                    plot(MF(:,i),'Linewidth',1.5)
+                    plot(MF(:,i),'b','Linewidth',1.5)
                     title(T{i});
                 end
                 suptitle('Momentum force')
@@ -1464,10 +2000,7 @@ classdef Leg < matlab.mixin.SetGet
                 figure(4)
                 for i = 1:obj.num_bodies-1
                     subplot(1,3,i)
-                    plot(GF1(:,i),'r','Linewidth',1.5)
-                    hold on
-                    plot(GF2(:,i),'b','Linewidth',1.5)
-                    hold off
+                    plot(GF(:,i),'b','Linewidth',1.5)
                     title(T{i});
                 end
                 suptitle('Gravitational Force ')
@@ -1475,16 +2008,385 @@ classdef Leg < matlab.mixin.SetGet
             
             if to_plot ==2
                 for i = 1:obj.num_bodies-1
-                    subplot(1,3,i)
-                    plot(IF1(:,i)+GF1(:,i),'r','Linewidth',1.5)
-                    hold on 
-                    plot(IF2(:,i)+INF(:,i)+GF2(:,i)-MF(:,i),'b','Linewidth',1.5)
+                    subplot(3,1,i)
+                    %                     plot(-IF(1:50,i)-GF(1:50,i)-INF(1:50,i)+MF(1:50,i),'b','Linewidth',1.5)
+                    plot(IF(:,i)+GF(:,i)+INF(:,i)-MF(:,i),'b','Linewidth',1.5)
                     hold off
                     title(T{i});
                 end
-                suptitle('EOM force during walking')
+                %                 suptitle('EOM force during walking')
             end
-            keyboard
+            
+            %             keyboard
+            %             EOM = IF2+INF+GF2-MF;
+            %             save ('EOM.mat','EOM')
         end
+        %% Function: Plot walking motion for two Leg walking
+        function plot_walking_motion(obj,to_plot)
+            %             to_plot = 1;
+            %%% Initialization
+            sizer = cell(3,1);
+            LH_joints = sizer;
+            LH_bodies = sizer;
+            RH_joints = sizer;
+            RH_bodies = sizer;
+            step_num = length(obj.dt_motion);
+            Stance2Swing = step_num/2;
+            
+            %%% Record motion data
+            
+            % Joints motion
+            LH_motion = obj.theta_motion;
+            RH_motion = circshift(LH_motion,Stance2Swing,1);
+            
+            % Joints and bodies position during walking
+            for i = 1: obj.num_bodies-1
+                LH_joints{i} = obj.joint_obj{i+1}.joint_motion;
+                LH_bodies{i} = obj.joint_obj{i+1}.body_motion;
+                RH_joints{i} = circshift(LH_joints{i},Stance2Swing,1);
+                RH_bodies{i} = circshift(LH_bodies{i},Stance2Swing,1);
+            end
+            
+            if to_plot ==1
+                
+                % Plot joint motion
+                figure (1)
+                T = {'Hip';'Knee';'Ankle'};
+                for i = 1: obj.num_bodies-1
+                    subplot(1,3,i)
+                    plot(LH_motion(:,i),'b','Linewidth',2)
+                    hold on
+                    plot(RH_motion(:,i),'r','Linewidth',2)
+                    hold off
+                    title(T{i})
+                end
+                set(gcf,'Position',[200 300 1200 400])
+                suptitle('joint motions for hind limb')
+                
+                
+                % Plot Walking motion
+                figure(2)
+                for i = 1:step_num
+                    % Calculate Jac and toe position
+                    [~,LH_toe] = obj.compute_jac(LH_motion(i,:)');
+                    [~,RH_toe] = obj.compute_jac(RH_motion(i,:)');
+                    
+                    % Plot walking motion
+                    plot([LH_joints{1}(i,1),LH_joints{2}(i,1)],[LH_joints{1}(i,2),LH_joints{2}(i,2)],'k-','Linewidth',2);
+                    hold on
+                    plot([RH_joints{1}(i,1),RH_joints{2}(i,1)],[RH_joints{1}(i,2),RH_joints{2}(i,2)],'r-','Linewidth',2);
+                    hold on
+                    plot([LH_joints{2}(i,1),LH_joints{3}(i,1)],[LH_joints{2}(i,2),LH_joints{3}(i,2)],'k-','Linewidth',2);
+                    hold on
+                    plot([RH_joints{2}(i,1),RH_joints{3}(i,1)],[RH_joints{2}(i,2),RH_joints{3}(i,2)],'r-','Linewidth',2);
+                    hold on
+                    plot([LH_joints{3}(i,1),LH_toe(1)],[LH_joints{3}(i,2),LH_toe(2)],'k-','Linewidth',2);
+                    hold on
+                    plot([RH_joints{3}(i,1),RH_toe(1)],[RH_joints{3}(i,2),RH_toe(2)],'r-','Linewidth',2);
+                    hold off
+                    
+                    title('Waling motion(Side View)')
+                    
+                    axis([-0.1 0.1 -0.08 0])
+                    axis equal
+                    
+                    hline = refline([0 -0.0618]);
+                    hline.Color = 'k';
+                    
+                    set(gca,'XDir','reverse');
+                    set(gca,'xticklabel',[]);
+                    set(gca,'yticklabel',[]);
+                    set(gcf,'Position',[500 300 800 600])
+                    
+                    
+                    L(i) = getframe;
+                end
+                %                 movie(L,5,30)
+                close
+                
+                % Plot for walking cartoon
+                figure (3)
+                Phase = 1:step_num/4:step_num;
+                for i = 1:4
+                    j = Phase(i);
+                    
+                    % Calculate Jac and toe position
+                    [~,LH_toe] = obj.compute_jac(LH_motion(j,:)');
+                    [~,RH_toe] = obj.compute_jac(RH_motion(j,:)');
+                    
+                    % store the new joint positon
+                    basline = -0.0618;
+                    Lhx = LH_joints{1}(j,1) ;
+                    Lhy = LH_joints{1}(j,2) - basline;
+                    Lkx = LH_joints{2}(j,1);
+                    Lky = LH_joints{2}(j,2) - basline;
+                    Lax = LH_joints{3}(j,1);
+                    Lay = LH_joints{3}(j,2) - basline;
+                    Ltx =  LH_toe(1);
+                    Lty = LH_toe(2) - basline;
+                    
+                    Rhx = RH_joints{1}(j,1) ;
+                    Rhy = RH_joints{1}(j,2) - basline;
+                    Rkx = RH_joints{2}(j,1);
+                    Rky = RH_joints{2}(j,2) - basline;
+                    Rax = RH_joints{3}(j,1);
+                    Ray = RH_joints{3}(j,2) - basline;
+                    Rtx =  RH_toe(1);
+                    Rty = RH_toe(2) - basline;
+                    
+                    %plot ground motion
+                    subplot(1,4,i)
+                    plot([Lhx,Lkx],[Lhy,Lky],'k-','Linewidth',2);
+                    hold on
+                    plot([Rhx,Rkx],[Rhy,Rky],'r-','Linewidth',2);
+                    hold on
+                    plot([Lkx,Lax],[Lky,Lay],'k-','Linewidth',2);
+                    hold on
+                    plot([Rkx,Rax],[Rky,Ray],'r-','Linewidth',2);
+                    hold on
+                    plot([Lax,Ltx],[Lay,Lty],'k-','Linewidth',2);
+                    hold on
+                    plot([Rax,Rtx],[Ray,Rty],'r-','Linewidth',2);
+                    hold off
+                    
+                    %                     axis equal
+                    axis([-0.05 0.05 0 0.08])
+                    pbaspect([1 1 1])
+                    
+                    set(gca,'XDir','reverse');
+                    set(gca,'XTick',[])
+                    set(gca,'YTick',[])
+                    set(gca,'YColor','none')
+                    box off
+                end
+                keyboard
+            end
+        end
+        %% Function: Plot passive tension around walking phases
+        function plot_phase_passive_tension(obj,to_plot)
+            %             to_plot = 1;
+            
+            step_num = length(obj.dt_motion);
+            musc_num = length(obj.musc_inds);
+            
+            PT = zeros(step_num,musc_num);
+            holder = zeros(20,8);
+            
+            for i = 1:musc_num
+                PT(:,i) = obj.musc_obj{i}.passive_tension_profile;
+            end
+            
+            PT = [PT;PT];
+            Phase = [100,25,50,75];
+            
+            if to_plot ==1
+                MN = {'BFA','BFP','VA','GA','TA','SO','IP','RF'};
+                PN = {'Touch down','Mid stance','Toe off', 'Mid swing'};
+                for i = 1:4
+                    %                     subplot (1,4,i)
+                    st = Phase(i);
+                    t=0:1:20;
+                    
+                    for j = 1:musc_num
+                        
+                        if i ==1
+                            PT(st-10:st+10,j) = smooth(PT(st-10:st+10,j));
+                        end
+                        
+                        subplot (8,4,i+4*(j-1))
+                        plot(t,PT(st-10:st+10,j));
+                        
+                        xticks([0 10 20])
+                        set(gca,'xticklabel',[]);
+                        xlim auto
+                        
+                        %                         yMin = round(min(PT(st-10:st+10,j)));
+                        %                         yMax = round(max(PT(st-10:st+10,j)));
+                        %                         set(gca,'YTick',[yMin yMax]);
+                        ylim auto
+                        
+                        %                         set(gca,'yticklabel',[yMin yMax]);
+                        %                         yticklabels([yMin yMax])
+                        
+                        if i ==1
+                            ylabel(MN{j},'fontsize', 11)
+                            Phase(i) = 0;
+                        end
+                        
+                        if j == musc_num
+                            set(gca,'xticklabel',{'',Phase(i),''});
+                        end
+                    end
+                    
+                    xlabel(PN{i},'fontsize', 12)
+                    set(gcf,'Position',[50 100 814 539])
+                end
+                
+            end
+            %            keyboard
+        end
+        %% Function: Plot walking motion for ground walking
+        function plot_ground_walking_motion(obj,to_plot)
+            % For the ground walking, we need split into two phase to
+            % calculate the walking motion and Gravitational Force.I.E.the
+            % stance and swing phase as two groups. the stance phase
+            % calculate the jacobian of foot position as base line. For the
+            % swing phase we use end of stance phase pelvis postion to
+            % calculate the swing motion.
+            
+            %~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+            step_num = length(obj.dt_motion);
+            Stance2Swing = step_num/2;
+            toe_position = zeros(step_num,3);
+            
+            %%% Calculate toe_position during walking
+            for i = 1:step_num
+                [~,toe_position(i,:)] = obj.compute_jac(obj.theta_motion(i,:)');
+            end
+            
+            %%% For Stance phase, the toe is on the ground, so we set
+            %%% toe_position as basepoint.
+            
+            
+            % Calculate bodies and joints postion during Stance phase
+            ST_toe = toe_position(1:Stance2Swing,:);
+            ST_joint_motion = cell(obj.num_bodies,1);
+            ST_joint_motion{4} = zeros(Stance2Swing,3);
+            ST_body_motion = cell(obj.num_bodies,1);
+            ST_body_motion{1} = zeros(Stance2Swing,3) - ST_toe;
+            
+            for i = 1:obj.num_bodies-1
+                ST_joint_motion{i} = obj.joint_obj{i+1}.joint_motion(1:Stance2Swing,:) - ST_toe;
+                ST_body_motion{i+1} = obj.joint_obj{i+1}.body_motion(1:Stance2Swing,:) - ST_toe;
+            end
+            
+            %%% For Swing phase, the pelvis is fixed at air, so we set the
+            %%% pelvis as the basepoint.
+            
+            % Record the pelvis position for last phase
+            %             Pelvis_position = ST_body_motion{1}(end,:);
+            Pelvis_position(:,1) = ST_body_motion{1}(:,1) - ST_body_motion{1}(1,1) + ST_body_motion{1}(end,1);
+            Pelvis_position(:,2) = ST_body_motion{1}(:,2);
+            Pelvis_position(:,3) = flipud(ST_body_motion{1}(:,3));
+            
+            
+            % Calculate bodies and joints postion during Swing phase
+            SW_toe = toe_position(Stance2Swing+1:step_num,:);
+            SW_joint_motion = cell(obj.num_bodies,1);
+            SW_joint_motion{4} = zeros(Stance2Swing,3) + Pelvis_position + SW_toe;
+            SW_body_motion = cell(obj.num_bodies,1);
+            SW_body_motion{1} = zeros(Stance2Swing,3) + Pelvis_position;
+            
+            for i = 1:obj.num_bodies-1
+                SW_joint_motion{i} = obj.joint_obj{i+1}.joint_motion(Stance2Swing+1:step_num,:) + Pelvis_position;
+                SW_body_motion{i+1} = obj.joint_obj{i+1}.body_motion(Stance2Swing+1:step_num,:) + Pelvis_position;
+            end
+            
+            %%% Combine Stance and Swing Phase
+            for i = 1:obj.num_bodies
+                body_motion{i} = [ST_body_motion{i};SW_body_motion{i}];
+                joint_motion{i} = [ST_joint_motion{i};SW_joint_motion{i}];
+            end
+            
+            % Calculate RH_motion
+            for i = 1:obj.num_bodies -1
+                RH_motion{i}(1:Stance2Swing,:) = obj.joint_obj{i+1}.joint_motion(Stance2Swing+1:end,:) - ST_toe;
+                RH_motion{i}(Stance2Swing+1:step_num,:) = obj.joint_obj{i+1}.joint_motion(1:Stance2Swing,:) + Pelvis_position;
+            end
+            RH_motion{4}(1:Stance2Swing,:) = SW_toe- ST_toe;
+            RH_motion{4}(Stance2Swing+1:step_num,:) = ST_toe  + Pelvis_position;
+            %~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+            if to_plot == 1
+                % Plot decesion: 0.Nothing; 1.All phase; 2.Stance Phase; 3.Swing phase
+                
+                Chose_plot = 1;
+                
+                if Chose_plot ==1
+                    for i = 1:step_num
+                        plot([joint_motion{1}(i,1),joint_motion{2}(i,1)],[joint_motion{1}(i,2),joint_motion{2}(i,2)],'k-','Linewidth',2);
+                        hold on
+                        plot([RH_motion{1}(i,1),RH_motion{2}(i,1)],[RH_motion{1}(i,2),RH_motion{2}(i,2)],'r-','Linewidth',2);
+                        hold on
+                        plot([joint_motion{2}(i,1),joint_motion{3}(i,1)],[joint_motion{2}(i,2),joint_motion{3}(i,2)],'k-','Linewidth',2);
+                        hold on
+                        plot([RH_motion{2}(i,1),RH_motion{3}(i,1)],[RH_motion{2}(i,2),RH_motion{3}(i,2)],'r-','Linewidth',2);
+                        hold on
+                        plot([joint_motion{3}(i,1),joint_motion{4}(i,1)],[joint_motion{3}(i,2),joint_motion{4}(i,2)],'k-','Linewidth',2);
+                        hold on
+                        plot([RH_motion{3}(i,1),RH_motion{4}(i,1)],[RH_motion{3}(i,2),RH_motion{4}(i,2)],'r-','Linewidth',2);
+                        hold off
+                        
+                        axis equal
+                        axis([-0.05 0.16 0 0.08])
+                        
+                        set(gca,'XDir','reverse');
+                        set(gcf,'Position',[500 300 800 400])
+                        
+                        text(joint_motion{1}(i,1),joint_motion{1}(i,2),'x','color','r');
+                        text(body_motion{1}(i,1),body_motion{1}(i,2),'o','color','b')
+                        text(joint_motion{2}(i,1),joint_motion{2}(i,2),'x','color','r');
+                        text(body_motion{2}(i,1),body_motion{2}(i,2),'o','color','b');
+                        text(joint_motion{3}(i,1),joint_motion{3}(i,2),'x','color','r');
+                        text(body_motion{3}(i,1),body_motion{3}(i,2),'o','color','b');
+                        text(body_motion{4}(i,1),body_motion{4}(i,2),'o','color','b');
+                        
+                        W(i) = getframe;
+                    end
+                    movie(W,5,30)
+                end
+                
+                if Chose_plot == 2
+                    for i = 1:Stance2Swing
+                        plot([ST_joint_motion{1}(i,1),ST_joint_motion{2}(i,1)],[ST_joint_motion{1}(i,2),ST_joint_motion{2}(i,2)],'k-','Linewidth',2);
+                        hold on
+                        plot([ST_joint_motion{2}(i,1),ST_joint_motion{3}(i,1)],[ST_joint_motion{2}(i,2),ST_joint_motion{3}(i,2)],'k-','Linewidth',2);
+                        hold on
+                        plot([ST_joint_motion{3}(i,1),ST_joint_motion{4}(i,1)],[ST_joint_motion{3}(i,2),ST_joint_motion{4}(i,2)],'k-','Linewidth',2);
+                        hold off
+                        
+                        axis equal
+                        axis([-0.06 0.06 0 0.09])
+                        
+                        set(gca,'XDir','reverse');
+                        
+                        ST(i) = getframe;
+                    end
+                    movie(ST,5,30)
+                end
+                
+                if Chose_plot == 3
+                    for i = 1:Stance2Swing
+                        plot([SW_joint_motion{1}(i,1),SW_joint_motion{2}(i,1)],[SW_joint_motion{1}(i,2),SW_joint_motion{2}(i,2)],'k-','Linewidth',2);
+                        hold on
+                        plot([SW_joint_motion{2}(i,1),SW_joint_motion{3}(i,1)],[SW_joint_motion{2}(i,2),SW_joint_motion{3}(i,2)],'k-','Linewidth',2);
+                        hold on
+                        plot([SW_joint_motion{3}(i,1),SW_joint_motion{4}(i,1)],[SW_joint_motion{3}(i,2),SW_joint_motion{4}(i,2)],'k-','Linewidth',2);
+                        hold off
+                        
+                        axis equal
+                        axis([-0.01 0.16 0 0.09])
+                        
+                        set(gca,'XDir','reverse');
+                        
+                        
+                        SW(i) = getframe;
+                    end
+                    movie(SW,5,30)
+                end
+                keyboard
+            end
+        end
+        %% Function: Shortest distance between two vectors
+        function [distance] = vector_distance(~,vector1,vector2,AB)
+            % Function to calculate the shorest distance between two
+            % vectors. V1 = (a1,b1,c1); V2 = (a2,b2,c2); Cross the two
+            % vector to get N = V1xV2 = (x,y,z) the direction vector. Pick
+            % any point from the two vector line A and B, the project of
+            % vector AB in vector N's direction is the shorest distance of
+            % those two vector.
+            
+            N = cross(vector1,vector2);
+            distance = dot(N,AB)/norm(N);
+        end  
     end
 end

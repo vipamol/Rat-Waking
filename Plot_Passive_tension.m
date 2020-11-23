@@ -24,9 +24,10 @@ else
         subplot(2,num/2,i)
         plot(Tension{i},'Linewidth',1.5)
         title(muscle_name{i},'FontSize',9)
+        ylim([0 50])
     end
     set(gcf,'Position',[200 100 1200 500])
-    suptitle('Muscle Passive Tension during walking')
+    suptitle('Muscle Passive Tension during walking (N)')
 end
 
 end

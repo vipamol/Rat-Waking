@@ -709,7 +709,7 @@
 <IIDischarge>100</IIDischarge>
 </RigidBody>
 <RigidBody>
-<Name>GastrocnemiusOrigin Femur RH_Knee_Flx</Name>
+<Name>GastrocnemiusOrigin Femur RH_Knee Flx</Name>
 <ID>22ccd77c-f2d5-4c02-88ce-9c9cf41bd277</ID>
 <Description/>
 <GraphicsAlpha>1</GraphicsAlpha>
@@ -4351,7 +4351,7 @@
 <IIDischarge>100</IIDischarge>
 </RigidBody>
 <RigidBody>
-<Name>GastrocnemiusOrigin Femur LH_Knee_Flx</Name>
+<Name>GastrocnemiusOrigin Femur LH_Knee Flx</Name>
 <ID>e8a73c28-cfd6-42fe-89ba-e706340e8c16</ID>
 <Description/>
 <GraphicsAlpha>1</GraphicsAlpha>
